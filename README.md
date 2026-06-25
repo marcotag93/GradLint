@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/marcotag93/GradLint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/marcotag93/GradLint/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/gradlint.svg?cacheSeconds=3600)](https://pypi.org/project/gradlint/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20847595.svg)](https://doi.org/10.5281/zenodo.20847595)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Fast, standalone **gradient-scheme quality control**, **b-vector flip / axis-permutation

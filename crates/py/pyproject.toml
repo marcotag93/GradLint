@@ -41,6 +41,7 @@ Homepage = "https://github.com/marcotag93/GradLint"
 Repository = "https://github.com/marcotag93/GradLint"
 Documentation = "https://github.com/marcotag93/GradLint#readme"
 Changelog = "https://github.com/marcotag93/GradLint/blob/main/CHANGELOG.md"
+DOI = "https://doi.org/10.5281/zenodo.20847595"
 
 [tool.maturin]
 module-name = "gradlint._gradlint"
