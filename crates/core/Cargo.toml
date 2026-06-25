@@ -1,0 +1,31 @@
+[package]
+name = "gradlint-core"
+description = "Core algorithms for gradlint: gradient-scheme QC, b-vector flip detection, and repair."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[dependencies]
+ndarray.workspace = true
+nalgebra.workspace = true
+nifti = { workspace = true, features = ["ndarray_volumes"] }
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+time.workspace = true
+libdeflater = { version = "1", optional = true }
+
+[features]
+# Opt-in faster gzip inflate of .nii.gz via libdeflate (C dep). Off by default:
+# the default build stays pure-Rust and byte-identical.
+libdeflate = ["dep:libdeflater"]
+
+[dev-dependencies]
+tempfile = "3"

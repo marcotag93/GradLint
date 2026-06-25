@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: gradlint
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Marco
+    family-names: Tagliaferri
+    email: marco.tagliaferri93@gmail.com
+version: 1.1.1
+date-released: 2026-06-25
+license: MIT
+repository-code: "https://github.com/marcotag93/GradLint"
+url: "https://github.com/marcotag93/GradLint"
+# Replace with the Zenodo concept DOI once the first release is archived.
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.0000000
+    description: Concept DOI for all versions.
+abstract: >-
+  Fast, standalone gradient-scheme quality control, b-vector flip and
+  axis-permutation detection, and auto-repair for diffusion MRI.
+keywords:
+  - diffusion MRI
+  - tractography
+  - quality control
+  - gradient table
+  - b-vector
