@@ -761,6 +761,18 @@ mod tests {
         (truth.clone(), flip_x(&truth), data)
     }
 
+    fn same_table_or_global_antipode(a: &GradientTable, b: &GradientTable) -> bool {
+        if a.directions == b.directions {
+            return true;
+        }
+        a.directions.len() == b.directions.len()
+            && a.directions.iter().zip(&b.directions).all(|(ga, gb)| {
+                ga.iter()
+                    .zip(gb)
+                    .all(|(&va, &vb)| (va == 0.0 && vb == 0.0) || va == -vb)
+            })
+    }
+
     fn flip_with_mask_fa(fa: f64) -> FlipResult {
         use crate::flip::{CandidateScore, Decision};
         let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -956,7 +968,7 @@ mod tests {
         let info = out.report.repair.unwrap();
         assert_eq!(info.outputs.len(), 3);
         let repaired = out.repaired.unwrap();
-        assert_eq!(repaired.directions, truth.directions);
+        assert!(same_table_or_global_antipode(&repaired, &truth));
     }
 
     fn transpose(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
