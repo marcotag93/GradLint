@@ -48,42 +48,42 @@ jobs:
             interpreter: python3.13
             manylinux: "2_28"
             target: x86_64-unknown-linux-gnu
-          - os: macos-13
+          - os: macos-15
             python: "3.10"
             interpreter: python
             manylinux: "off"
             target: x86_64-apple-darwin
-          - os: macos-13
+          - os: macos-15
             python: "3.11"
             interpreter: python
             manylinux: "off"
             target: x86_64-apple-darwin
-          - os: macos-13
+          - os: macos-15
             python: "3.12"
             interpreter: python
             manylinux: "off"
             target: x86_64-apple-darwin
-          - os: macos-13
+          - os: macos-15
             python: "3.13"
             interpreter: python
             manylinux: "off"
             target: x86_64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             python: "3.10"
             interpreter: python
             manylinux: "off"
             target: aarch64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             python: "3.11"
             interpreter: python
             manylinux: "off"
             target: aarch64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             python: "3.12"
             interpreter: python
             manylinux: "off"
             target: aarch64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             python: "3.13"
             interpreter: python
             manylinux: "off"
@@ -253,9 +253,9 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-15
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
