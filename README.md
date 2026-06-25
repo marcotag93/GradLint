@@ -1,6 +1,6 @@
 # GradLint
 
-[![CI](https://github.com/marcotag93/GradLint/actions/workflows/ci.yml/badge.svg)](https://github.com/marcotag93/GradLint/actions/workflows/ci.yml)
+[![CI](https://github.com/marcotag93/GradLint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/marcotag93/GradLint/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/gradlint.svg)](https://pypi.org/project/gradlint/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
