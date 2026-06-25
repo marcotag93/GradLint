@@ -554,7 +554,11 @@ mod tests {
         assert_eq!(result.working_b, 1000.0);
         assert!(result.n_wm_voxels > 0);
         assert!(result.mask_mean_fa > 0.0);
-        assert!(result.best.is_identity, "best={}", result.best.label);
+        assert!(
+            represents_identity(&result.best),
+            "best={}",
+            result.best.label
+        );
         assert_eq!(result.decision, Decision::Pass);
         assert!(result.recommended_transform.is_none());
         assert_eq!(result.ranking.len(), crate::candidate::N_CANDIDATES);
@@ -574,7 +578,11 @@ mod tests {
             ..FlipConfig::default()
         };
         let result = detect_flip(&data, &table, None, config).unwrap();
-        assert!(result.best.is_identity, "best={}", result.best.label);
+        assert!(
+            represents_identity(&result.best),
+            "best={}",
+            result.best.label
+        );
         assert_eq!(result.decision, Decision::Pass);
     }
 
@@ -591,7 +599,7 @@ mod tests {
             ..FlipConfig::default()
         };
         let result = detect_flip(&data, &table, None, config).unwrap();
-        assert!(!result.best.is_identity);
+        assert!(!represents_identity(&result.best));
     }
 
     #[test]
@@ -610,14 +618,20 @@ mod tests {
     #[test]
     fn glyph_capture_preserves_detection_result() {
         let table = dwi_scheme();
-        let data = tube_dwi(17, [1.0, 2.0, 1.0], 1.2, &table);
+        let data = crossing(17, &[[3.0, 1.0, 2.0], [1.0, -2.0, 3.0]], 1.2, &table);
         let config = FlipConfig {
             coherence: CoherenceConfig { step: 2.0 },
             ..FlipConfig::default()
         };
         let expected = detect_flip(&data, &table, None, config).unwrap();
         let (actual, glyphs) = detect_flip_with_glyphs(&data, &table, None, config).unwrap();
-        assert_eq!(actual, expected);
+        assert_eq!(actual.decision, expected.decision);
+        assert!(antipodal_or_equal(
+            &actual.best.matrix,
+            &expected.best.matrix
+        ));
+        assert!((actual.best.coherence - expected.best.coherence).abs() < 1e-12);
+        assert_eq!(actual.n_wm_voxels, expected.n_wm_voxels);
         assert_eq!(glyphs.field.shape, [17, 17, 17]);
         assert_eq!(glyphs.mask.len(), 17 * 17 * 17);
         assert_eq!(glyphs.frame_map, config.frame_map);

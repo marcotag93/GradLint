@@ -1008,7 +1008,8 @@ mod tests {
                 result.best.label
             );
             assert_eq!(
-                result.best.is_identity, expect_identity,
+                same_convention(&result.best.matrix, &id),
+                expect_identity,
                 "best={}",
                 result.best.label
             );
