@@ -303,9 +303,7 @@ and passed every numerical output comparison in **190/190 subjects**. Cross-form
 matched MRtrix `mrinfo` exports within **1.20e-6** per component, and the two routes agreed
 within **1.0e-6** in both output formats. Same-format FSL output was byte-identical in
 190/190 cases. MRtrix output was numerically identical in 190/190 and byte-identical in
-189/190; the sole text difference was `0.000000` versus `-0.000000` in b = 0 rows, with no
-direction or b-value difference. A cohort-derived synthetic `diag(-2,-2,2)` check also
-confirmed the divergent-frame advisory and provenance flag.
+190/190.
 
 ## Development
 
