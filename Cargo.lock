@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "gradlint-cli"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "clap",
  "gradlint-core",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "gradlint-core"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "libdeflater",
  "nalgebra",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "gradlint-py"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "gradlint-core",
  "ndarray",
