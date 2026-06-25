@@ -209,13 +209,20 @@ jobs:
         with:
           path: artifacts
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/python-wheels-*/*.whl
-            artifacts/python-sdist/*.tar.gz
-            artifacts/cli-*/*
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          mapfile -t files < <(find artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No release artifacts found" >&2
+            exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --generate-notes
+          fi
 
   testpypi-publish:
     name: Publish to TestPyPI
