@@ -211,6 +211,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           tag="${GITHUB_REF_NAME}"
           mapfile -t files < <(find artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.zip' \) | sort)
@@ -266,3 +267,5 @@ jobs:
           merge-multiple: true
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
