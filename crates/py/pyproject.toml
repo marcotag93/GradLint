@@ -5,6 +5,18 @@ build-backend = "maturin"
 [project]
 name = "gradlint"
 description = "Fast gradient-scheme QC, b-vector flip detection, and repair for diffusion MRI."
+readme = { text = """# GradLint
+
+GradLint is a Rust-powered Python package and command-line tool for diffusion MRI gradient-table quality control. It audits FSL and MRtrix gradient schemes, detects b-vector flips against DWI image evidence, and writes corrected gradients with machine-readable provenance for tractography pipelines.
+
+Install the prebuilt package with:
+
+```bash
+pip install gradlint
+```
+
+See the project repository for the full README, examples, validation notes, and release history.
+""", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Marco Tagliaferri", email = "marco.tagliaferri93@gmail.com" }]
