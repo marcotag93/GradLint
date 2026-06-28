@@ -241,6 +241,27 @@ def test_correction_presentation_states(
     assert presentation.summary == summary
 
 
+@pytest.mark.parametrize(
+    ("decision", "outputs", "exit_code"),
+    [
+        ("PASS", None, 0),
+        ("WARN", None, 3),  # withheld: pipeline halts
+        ("WARN", ["fixed.bvec", "fixed.bval"], 0),  # force-applied: continues
+        ("WARN", [], 3),  # force-repair dry-run: nothing written
+        ("FLAG", ["fixed.bvec", "fixed.bval"], 0),
+        ("FLAG", None, 0),
+        ("FLAG", [], 0),
+    ],
+)
+def test_report_exit_code(
+    decision: str, outputs: list[str] | None, exit_code: int
+) -> None:
+    from gradlint.cli import _report_exit_code
+
+    report = report_with_correction_state(decision, outputs)
+    assert _report_exit_code(report) == exit_code
+
+
 def test_scheme_warn_with_pass_flip_needs_no_gradient_correction() -> None:
     from gradlint.report.model import correction_presentation
 

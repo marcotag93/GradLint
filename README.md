@@ -19,6 +19,15 @@ are never modified in place unless explicitly requested.
 pip install gradlint
 ```
 
+Alternatively, install the `gradlint` command in its own isolated environment with
+[pipx](https://pipx.pypa.io/):
+
+```bash
+pipx install gradlint
+```
+
+Both routes install from the same pre-built PyPI wheels.
+
 This installs the single `gradlint` command — every subcommand (`inspect`, `audit`,
 `detect-flip`, `repair`, `recompute-bval`) and every flag — plus the importable `gradlint`
 Python package.
@@ -115,11 +124,11 @@ GradLint returns one of three verdicts. The exit code is intended for pipeline g
 `0` means the workflow may continue, while `3` means GradLint found a WARN condition
 that was not repaired and should be reviewed.
 
-| Verdict        | Exit | Meaning                                                                                                                                                                                                                                                                              |
-| -------------- | :---: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **PASS** | `0` | The gradient table is consistent with the image; no flip detected. Nothing is written.                                                                                                                                                                                               |
+| Verdict        |                            Exit                            | Meaning                                                                                                                                                                                                                                              |
+| -------------- | :---------------------------------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PASS** |                            `0`                            | The gradient table is consistent with the image; no flip detected. Nothing is written.                                                                                                                                                               |
 | **WARN** | `3` when unrepaired, `0` with `repair --force-repair` | A likely issue with low confidence — the best convention's margin is below the auto-repair threshold. The repair is withheld unless `repair --force-repair` is used. With `--strict`, a severe scheme-quality finding also raises PASS to WARN. |
-| **FLAG** | `0` | A b-vector flip / axis-permutation is detected with high confidence. `repair` writes the corrected `bvec`/`bval` and a provenance log, allowing the downstream pipeline to continue with the repaired table. |
+| **FLAG** |                            `0`                            | A b-vector flip / axis-permutation is detected with high confidence.`repair` writes the corrected `bvec`/`bval` and a provenance log, allowing the downstream pipeline to continue with the repaired table.                                    |
 
 A false repair on good data is the worst outcome, so detection is deliberately
 specificity-first: when the margin is ambiguous GradLint emits WARN rather than an

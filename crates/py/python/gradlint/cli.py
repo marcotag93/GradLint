@@ -388,8 +388,11 @@ def _emit(
 
 
 def _report_exit_code(report: Report) -> int:
-    if report.status == "WARN" and report.repair is None:
-        return 3
+    if report.status == "WARN":
+        # Unrepaired WARN halts the pipeline (exit 3); a WARN whose correction
+        # was force-applied to disk continues (exit 0)
+        applied = report.repair is not None and bool(report.repair.outputs)
+        return _EXIT["PASS"] if applied else _EXIT["WARN"]
     return _EXIT.get(report.status, 1)
 
 
