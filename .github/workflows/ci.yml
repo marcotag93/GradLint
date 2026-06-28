@@ -54,7 +54,9 @@ jobs:
           python -m pip install --upgrade pip maturin
           maturin build -m crates/py/Cargo.toml --out dist
       - name: Install
-        run: pip install --find-links dist "gradlint[dev]"
+        run: |
+          pip install "gradlint[dev]" --find-links dist
+          pip install gradlint --force-reinstall --no-deps --no-index --find-links dist
       - name: Lint
         run: |
           ruff check crates/py/python tests
