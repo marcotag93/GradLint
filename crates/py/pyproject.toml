@@ -40,7 +40,7 @@ dev = ["pytest>=8", "ruff", "black", "isort"]
 Homepage = "https://github.com/marcotag93/GradLint"
 Repository = "https://github.com/marcotag93/GradLint"
 Documentation = "https://github.com/marcotag93/GradLint#readme"
-Changelog = "https://github.com/marcotag93/GradLint/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/marcotag93/GradLint/releases"
 DOI = "https://doi.org/10.5281/zenodo.20847595"
 
 [tool.maturin]
