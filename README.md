@@ -13,21 +13,21 @@ audits the b-value and gradient scheme, and — when a flip is found — emits a
 gradient table together with a machine-readable provenance log. The input gradient files
 are never modified in place unless explicitly requested.
 
-## Author
+---
 
-**Marco Tagliaferri** — PhD Candidate in Neuroscience  
-[Center for Mind/Brain Sciences (CIMeC)](https://www.cimec.unitn.it/), University of Trento, Italy
+## 👤 Author
 
-[marco.tagliaferri@unitn.it](mailto:marco.tagliaferri@unitn.it) ·
-[marco.tagliaferri93@gmail.com](mailto:marco.tagliaferri93@gmail.com)
-
-## Citing GradLint
+**Marco Tagliaferri** — *PhD Candidate in Neuroscience*
+🏛️ [Center for Mind/Brain Sciences (CIMeC)](https://www.cimec.unitn.it/), University of Trento, Italy
+[![Email](https://img.shields.io/badge/Email-marco.tagliaferri%40unitn.it-D14836?style=flat&logo=gmail&logoColor=white)](mailto:marco.tagliaferri@unitn.it)
+[![Email](https://img.shields.io/badge/Email-marco.tagliaferri93%40gmail.com-D14836?style=flat&logo=gmail&logoColor=white)](mailto:marco.tagliaferri93@gmail.com)
+[![GitHub](https://img.shields.io/badge/GitHub-marcotag93-181717?style=flat&logo=github)](https://github.com/marcotag93)
 
 If you use GradLint in your research, please cite the software:
 
 > Tagliaferri, M. (2026). *GradLint* [Computer software]. Zenodo. [https://doi.org/10.5281/zenodo.20847595](https://doi.org/10.5281/zenodo.20847595)
 
-BibTeX:
+**BibTeX:**
 
 ```bibtex
 @software{Tagliaferri_GradLint_2026,
@@ -46,6 +46,8 @@ cite the specific release used in your analysis when available.
 
 > A manuscript describing GradLint is currently in preparation. This section will be
 > updated with the article citation once it is published.
+
+---
 
 ## Install
 

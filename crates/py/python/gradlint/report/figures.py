@@ -23,6 +23,7 @@ STATUS_COLORS = {"PASS": "#1a8a3a", "WARN": "#c77800", "FLAG": "#c0271b"}
 _DPI = 110
 _GLYPH_DPI = 160
 
+
 def build_figures(
     report: Report, *, glyphs: dict[str, Any] | None = None
 ) -> dict[str, str]:
