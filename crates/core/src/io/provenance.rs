@@ -224,6 +224,7 @@ mod tests {
             identity_coherence: 0.4,
             margin: 0.2,
             relative_margin: 0.2,
+            margin_threshold: None,
             decision: Decision::Flag,
             recommended_transform: Some(m),
             recommended_label: Some("-x+y+z".to_string()),

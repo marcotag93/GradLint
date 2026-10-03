@@ -33,6 +33,9 @@ const LONG_VERSION: &str = env!("CARGO_PKG_VERSION");
     about = "Gradient-scheme QC and b-vector repair for diffusion MRI"
 )]
 struct Cli {
+    /// Number of worker threads (default: Rayon environment/automatic policy).
+    #[arg(long = "nthreads", global = true, value_name = "N")]
+    threads: Option<usize>,
     #[command(subcommand)]
     command: Command,
 }
@@ -76,6 +79,9 @@ struct SchemeOpts {
     /// Coherence step length in voxels (default scales ~4 mm with voxel size).
     #[arg(long, value_name = "VOXELS")]
     step: Option<f64>,
+    /// Relative margin required for an automatic repair (0.02 = 2%).
+    #[arg(long = "margin-threshold", default_value_t = 0.02)]
+    margin_threshold: f64,
     /// Promote severe scheme-quality issues (conditioning, direction count, b0
     /// drift) to WARN; scheme notes are emitted regardless.
     #[arg(long)]
@@ -196,12 +202,14 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<i32, String> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    let execution = gradlint_core::Execution::new(cli.threads).map_err(|e| e.to_string())?;
+    execution.run(|| match cli.command {
         Command::Inspect(args) => run_inspect(args),
         Command::Audit(args) => run_audit(args),
         Command::Repair(args) => run_repair(args),
         Command::RecomputeBval(args) => run_recompute(args),
-    }
+    })
 }
 
 fn run_inspect(args: InspectArgs) -> Result<i32, String> {
@@ -417,6 +425,7 @@ fn options(opts: &SchemeOpts) -> AuditOptions {
     audit.shell.tolerance = opts.tolerance;
     audit.shell.b0_threshold = opts.b0_threshold;
     audit.flip.shell = audit.shell;
+    audit.flip.margin_threshold = opts.margin_threshold;
     audit.working_shell = opts.shell;
     audit.strict = opts.strict;
     audit.norm_tolerance = opts.norm_tolerance;
@@ -766,6 +775,10 @@ fn print_profile(read: &ReadTimings, detect: &DetectTimings, total: Duration) {
     let coherence = detect.coherence.as_secs_f64();
     let total = total.as_secs_f64();
     let other = (total - decompress - convert - fit - coherence).max(0.0);
+    println!(
+        "threads: {}",
+        gradlint_core::execution::current_num_threads()
+    );
     println!("profile (seconds):");
     println!("  decompress {decompress:8.3}");
     println!("  convert    {convert:8.3}");
@@ -864,6 +877,7 @@ mod tests {
             identity_coherence: 0.6,
             margin: 0.3,
             relative_margin: 0.33,
+            margin_threshold: None,
             decision: Decision::Flag,
             recommended_transform: Some(flip_x),
             recommended_label: Some("-x+y+z".to_string()),

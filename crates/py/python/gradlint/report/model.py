@@ -198,6 +198,7 @@ class FlipResult:
     recommended_transform: Matrix | None
     recommended_label: str | None
     mask_mean_fa: float = 0.0
+    margin_threshold: float = 0.02
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> FlipResult:
@@ -206,6 +207,7 @@ class FlipResult:
             working_b=float(d["working_b"]),
             n_wm_voxels=int(d["n_wm_voxels"]),
             mask_mean_fa=float(d.get("mask_mean_fa", 0.0)),
+            margin_threshold=float(d.get("margin_threshold", 0.02)),
             ranking=[CandidateScore.from_dict(c) for c in d["ranking"]],
             best=CandidateScore.from_dict(d["best"]),
             runner_up=CandidateScore.from_dict(d["runner_up"]),

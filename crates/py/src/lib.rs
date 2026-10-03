@@ -31,7 +31,7 @@ fn build_features() -> Vec<&'static str> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (bvec=None, bval=None, grad=None, tolerance=0.05, b0_threshold=50.0, shell=None, strict=false, norm_tolerance=0.05))]
+#[pyo3(signature = (bvec=None, bval=None, grad=None, tolerance=0.05, b0_threshold=50.0, shell=None, strict=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn inspect(
     bvec: Option<String>,
@@ -42,19 +42,24 @@ fn inspect(
     shell: Option<f64>,
     strict: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<String> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
-    let report = pipeline::inspect(
-        &table,
-        inputs,
-        options(tolerance, b0_threshold, shell, strict, norm_tolerance),
-    )
-    .map_err(err)?;
+    let report = execution
+        .run(|| {
+            pipeline::inspect(
+                &table,
+                inputs,
+                options(tolerance, b0_threshold, shell, 0.02, strict, norm_tolerance),
+            )
+        })
+        .map_err(err)?;
     to_json(&report)
 }
 
 #[pyfunction]
-#[pyo3(signature = (bvec=None, bval=None, grad=None, dwi=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, strict=false, norm_tolerance=0.05))]
+#[pyo3(signature = (bvec=None, bval=None, grad=None, dwi=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn audit(
     bvec: Option<String>,
@@ -66,11 +71,21 @@ fn audit(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
     strict: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<String> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
-    let mut opts = options(tolerance, b0_threshold, shell, strict, norm_tolerance);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        strict,
+        norm_tolerance,
+    );
     let data = match dwi.as_deref() {
         Some(path) => {
             let (volume, info) = gradlint_core::read_volume_with_info(path).map_err(err)?;
@@ -85,13 +100,14 @@ fn audit(
         None => None,
     };
     let mask = read_optional_mask(mask.as_deref())?;
-    let report =
-        pipeline::audit(&table, data.as_ref(), mask.as_deref(), inputs, opts).map_err(err)?;
+    let report = execution
+        .run(|| pipeline::audit(&table, data.as_ref(), mask.as_deref(), inputs, opts))
+        .map_err(err)?;
     to_json(&report)
 }
 
 #[pyfunction]
-#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, strict=false, norm_tolerance=0.05))]
+#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn audit_with_glyphs(
     py: Python<'_>,
@@ -104,12 +120,22 @@ fn audit_with_glyphs(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
     strict: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<(String, Py<PyDict>)> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
-    let mut opts = options(tolerance, b0_threshold, shell, strict, norm_tolerance);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        strict,
+        norm_tolerance,
+    );
     pipeline::apply_geometry(
         &mut opts,
         &info,
@@ -117,8 +143,9 @@ fn audit_with_glyphs(
         step,
     );
     let mask = read_optional_mask(mask.as_deref())?;
-    let (report, glyphs) =
-        pipeline::audit_with_glyphs(&table, &data, mask.as_deref(), inputs, opts).map_err(err)?;
+    let (report, glyphs) = execution
+        .run(|| pipeline::audit_with_glyphs(&table, &data, mask.as_deref(), inputs, opts))
+        .map_err(err)?;
     Ok((to_json(&report)?, glyph_payload(py, &glyphs, &info)?))
 }
 
@@ -127,7 +154,7 @@ fn audit_with_glyphs(
 /// The report is byte-identical to `audit`; only the timing instrumentation is
 /// added, so this drives the Python CLI's `--profile`.
 #[pyfunction]
-#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, strict=false, norm_tolerance=0.05))]
+#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn audit_profiled(
     dwi: String,
@@ -139,11 +166,21 @@ fn audit_profiled(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
     strict: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<(String, HashMap<String, f64>)> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
-    let mut opts = options(tolerance, b0_threshold, shell, strict, norm_tolerance);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        strict,
+        norm_tolerance,
+    );
     let total = Instant::now();
     let (data, info, read) = gradlint_core::read_volume_with_info_timed(&dwi).map_err(err)?;
     pipeline::apply_geometry(
@@ -153,8 +190,9 @@ fn audit_profiled(
         step,
     );
     let mask = read_optional_mask(mask.as_deref())?;
-    let (report, detect) =
-        pipeline::audit_timed(&table, &data, mask.as_deref(), inputs, opts).map_err(err)?;
+    let (report, detect) = execution
+        .run(|| pipeline::audit_timed(&table, &data, mask.as_deref(), inputs, opts))
+        .map_err(err)?;
     let total = total.elapsed().as_secs_f64();
     let decompress = read.decompress.as_secs_f64();
     let convert = read.convert.as_secs_f64();
@@ -162,6 +200,7 @@ fn audit_profiled(
     let coherence = detect.coherence.as_secs_f64();
     let other = (total - decompress - convert - fit - coherence).max(0.0);
     let profile = HashMap::from([
+        ("threads".to_string(), execution.num_threads() as f64),
         ("decompress".to_string(), decompress),
         ("convert".to_string(), convert),
         ("fit".to_string(), fit),
@@ -173,7 +212,7 @@ fn audit_profiled(
 }
 
 #[pyfunction]
-#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, strict=false, norm_tolerance=0.05))]
+#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn audit_profiled_with_glyphs(
     py: Python<'_>,
@@ -186,11 +225,21 @@ fn audit_profiled_with_glyphs(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
     strict: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<(String, HashMap<String, f64>, Py<PyDict>)> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
-    let mut opts = options(tolerance, b0_threshold, shell, strict, norm_tolerance);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        strict,
+        norm_tolerance,
+    );
     let total = Instant::now();
     let (data, info, read) = gradlint_core::read_volume_with_info_timed(&dwi).map_err(err)?;
     pipeline::apply_geometry(
@@ -200,9 +249,9 @@ fn audit_profiled_with_glyphs(
         step,
     );
     let mask = read_optional_mask(mask.as_deref())?;
-    let (report, detect, glyphs) =
-        pipeline::audit_timed_with_glyphs(&table, &data, mask.as_deref(), inputs, opts)
-            .map_err(err)?;
+    let (report, detect, glyphs) = execution
+        .run(|| pipeline::audit_timed_with_glyphs(&table, &data, mask.as_deref(), inputs, opts))
+        .map_err(err)?;
     let total = total.elapsed().as_secs_f64();
     let decompress = read.decompress.as_secs_f64();
     let convert = read.convert.as_secs_f64();
@@ -210,6 +259,7 @@ fn audit_profiled_with_glyphs(
     let coherence = detect.coherence.as_secs_f64();
     let other = (total - decompress - convert - fit - coherence).max(0.0);
     let profile = HashMap::from([
+        ("threads".to_string(), execution.num_threads() as f64),
         ("decompress".to_string(), decompress),
         ("convert".to_string(), convert),
         ("fit".to_string(), fit),
@@ -229,7 +279,7 @@ fn audit_profiled_with_glyphs(
 /// small JSON summary (`status`, `exit_code`, `summary_path`, `results`) for the
 /// caller to print. The exit code blocks only on WARN.
 #[pyfunction]
-#[pyo3(signature = (root, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, strict=false, norm_tolerance=0.05))]
+#[pyo3(signature = (root, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn audit_bids(
     root: String,
@@ -237,11 +287,23 @@ fn audit_bids(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
     strict: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<String> {
-    let opts = options(tolerance, b0_threshold, shell, strict, norm_tolerance);
-    let outcome = bids_batch::run(Path::new(&root), opts, step).map_err(err)?;
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
+    let opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        strict,
+        norm_tolerance,
+    );
+    let outcome = execution
+        .run(|| bids_batch::run(Path::new(&root), opts, step))
+        .map_err(err)?;
     let results: Vec<_> = outcome
         .items
         .iter()
@@ -263,7 +325,7 @@ fn audit_bids(
 }
 
 #[pyfunction]
-#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None))]
+#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn detect_flip(
     dwi: String,
@@ -275,10 +337,20 @@ fn detect_flip(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
+    threads: Option<usize>,
 ) -> PyResult<String> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
-    let mut opts = options(tolerance, b0_threshold, shell, false, 0.05);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        false,
+        0.05,
+    );
     pipeline::apply_geometry(
         &mut opts,
         &info,
@@ -286,12 +358,14 @@ fn detect_flip(
         step,
     );
     let mask = read_optional_mask(mask.as_deref())?;
-    let report = pipeline::detect(&table, &data, mask.as_deref(), inputs, opts).map_err(err)?;
+    let report = execution
+        .run(|| pipeline::detect(&table, &data, mask.as_deref(), inputs, opts))
+        .map_err(err)?;
     to_json(&report)
 }
 
 #[pyfunction]
-#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None))]
+#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn detect_flip_with_glyphs(
     py: Python<'_>,
@@ -304,10 +378,20 @@ fn detect_flip_with_glyphs(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
+    threads: Option<usize>,
 ) -> PyResult<(String, Py<PyDict>)> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
-    let mut opts = options(tolerance, b0_threshold, shell, false, 0.05);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        false,
+        0.05,
+    );
     pipeline::apply_geometry(
         &mut opts,
         &info,
@@ -315,13 +399,14 @@ fn detect_flip_with_glyphs(
         step,
     );
     let mask = read_optional_mask(mask.as_deref())?;
-    let (report, glyphs) =
-        pipeline::detect_with_glyphs(&table, &data, mask.as_deref(), inputs, opts).map_err(err)?;
+    let (report, glyphs) = execution
+        .run(|| pipeline::detect_with_glyphs(&table, &data, mask.as_deref(), inputs, opts))
+        .map_err(err)?;
     Ok((to_json(&report)?, glyph_payload(py, &glyphs, &info)?))
 }
 
 #[pyfunction]
-#[pyo3(signature = (dwi, out_bvec, out_bval, bvec=None, bval=None, grad=None, mask=None, out_grad=None, provenance=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, dry_run=false, in_place=false, strict=false, force_repair=false, norm_tolerance=0.05))]
+#[pyo3(signature = (dwi, out_bvec, out_bval, bvec=None, bval=None, grad=None, mask=None, out_grad=None, provenance=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, dry_run=false, in_place=false, strict=false, force_repair=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn repair(
     dwi: String,
@@ -337,15 +422,25 @@ fn repair(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
     dry_run: bool,
     in_place: bool,
     strict: bool,
     force_repair: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<String> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
-    let mut opts = options(tolerance, b0_threshold, shell, strict, norm_tolerance);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        strict,
+        norm_tolerance,
+    );
     let frame = gradlint_core::frame_for(grad.is_some());
     pipeline::apply_geometry(&mut opts, &info, frame, step);
     let mask = read_optional_mask(mask.as_deref())?;
@@ -359,13 +454,14 @@ fn repair(
         force_repair,
         frame: Some(gradlint_core::FrameMaps::resolve(frame, &info)),
     };
-    let outcome =
-        pipeline::repair(&table, Some(&data), mask.as_deref(), inputs, opts, &spec).map_err(err)?;
+    let outcome = execution
+        .run(|| pipeline::repair(&table, Some(&data), mask.as_deref(), inputs, opts, &spec))
+        .map_err(err)?;
     to_json(&outcome.report)
 }
 
 #[pyfunction]
-#[pyo3(signature = (dwi, out_bvec, out_bval, bvec=None, bval=None, grad=None, mask=None, out_grad=None, provenance=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, dry_run=false, in_place=false, strict=false, force_repair=false, norm_tolerance=0.05))]
+#[pyo3(signature = (dwi, out_bvec, out_bval, bvec=None, bval=None, grad=None, mask=None, out_grad=None, provenance=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, dry_run=false, in_place=false, strict=false, force_repair=false, norm_tolerance=0.05, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn repair_with_glyphs(
     py: Python<'_>,
@@ -382,15 +478,25 @@ fn repair_with_glyphs(
     b0_threshold: f64,
     shell: Option<f64>,
     step: Option<f64>,
+    margin_threshold: f64,
     dry_run: bool,
     in_place: bool,
     strict: bool,
     force_repair: bool,
     norm_tolerance: f64,
+    threads: Option<usize>,
 ) -> PyResult<(String, Py<PyDict>)> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
-    let mut opts = options(tolerance, b0_threshold, shell, strict, norm_tolerance);
+    let mut opts = options(
+        tolerance,
+        b0_threshold,
+        shell,
+        margin_threshold,
+        strict,
+        norm_tolerance,
+    );
     let frame = gradlint_core::frame_for(grad.is_some());
     pipeline::apply_geometry(&mut opts, &info, frame, step);
     let mask = read_optional_mask(mask.as_deref())?;
@@ -404,9 +510,9 @@ fn repair_with_glyphs(
         force_repair,
         frame: Some(gradlint_core::FrameMaps::resolve(frame, &info)),
     };
-    let (outcome, glyphs) =
-        pipeline::repair_with_glyphs(&table, &data, mask.as_deref(), inputs, opts, &spec)
-            .map_err(err)?;
+    let (outcome, glyphs) = execution
+        .run(|| pipeline::repair_with_glyphs(&table, &data, mask.as_deref(), inputs, opts, &spec))
+        .map_err(err)?;
     Ok((
         to_json(&outcome.report)?,
         glyph_payload(py, &glyphs, &info)?,
@@ -416,7 +522,7 @@ fn repair_with_glyphs(
 /// Opt-in b-value recovery from amplitude-encoded bvecs. Never reached from
 /// `repair`; returns a JSON before/after summary.
 #[pyfunction]
-#[pyo3(signature = (out_bvec, out_bval, bvec=None, bval=None, grad=None, out_grad=None, provenance=None, b0_threshold=50.0, dry_run=false, in_place=false))]
+#[pyo3(signature = (out_bvec, out_bval, bvec=None, bval=None, grad=None, out_grad=None, provenance=None, b0_threshold=50.0, dry_run=false, in_place=false, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn recompute_bval(
     out_bvec: String,
@@ -429,7 +535,9 @@ fn recompute_bval(
     b0_threshold: f64,
     dry_run: bool,
     in_place: bool,
+    threads: Option<usize>,
 ) -> PyResult<String> {
+    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let shell = ShellConfig {
         b0_threshold,
@@ -443,7 +551,9 @@ fn recompute_bval(
         dry_run,
         in_place,
     };
-    let out = pipeline::recompute_bval(&table, inputs, shell, &spec).map_err(err)?;
+    let out = execution
+        .run(|| pipeline::recompute_bval(&table, inputs, shell, &spec))
+        .map_err(err)?;
     serde_json::to_string(&out.summary).map_err(err)
 }
 
@@ -474,6 +584,7 @@ fn options(
     tolerance: f64,
     b0_threshold: f64,
     shell: Option<f64>,
+    margin_threshold: f64,
     strict: bool,
     norm_tolerance: f64,
 ) -> AuditOptions {
@@ -481,6 +592,7 @@ fn options(
     options.shell.tolerance = tolerance;
     options.shell.b0_threshold = b0_threshold;
     options.flip.shell = options.shell;
+    options.flip.margin_threshold = margin_threshold;
     options.working_shell = shell;
     options.strict = strict;
     options.norm_tolerance = norm_tolerance;

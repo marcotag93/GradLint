@@ -26,11 +26,20 @@ pub enum Error {
     #[error("mask grid mismatch: mask has {mask} voxels but the DWI grid has {expected}")]
     MaskShapeMismatch { mask: usize, expected: usize },
 
+    #[error("threads must be a positive integer")]
+    InvalidThreads,
+
+    #[error("could not create thread pool: {0}")]
+    ThreadPool(#[from] rayon::ThreadPoolBuildError),
+
     #[error("DTI fit failed: {0}")]
     Fit(String),
 
     #[error("no usable non-b0 shell for flip detection")]
     NoUsableShell,
+
+    #[error("margin threshold must be finite and in (0, 1]: {0}")]
+    InvalidMarginThreshold(f64),
 
     #[error("amplitude-encoded bvecs (--strict): {0}")]
     AmplitudeEncoded(String),

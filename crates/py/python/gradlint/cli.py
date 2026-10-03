@@ -25,12 +25,13 @@ _EPILOG = """\
 flags (see `gradlint <command> -h` for the per-command list):
   gradients  --bvec FILE  --bval FILE  --grad FILE (MRtrix .b)
   image      --dwi FILE  --mask FILE   [audit/detect-flip/repair]
-  scheme     --tolerance F  --b0-threshold F  --shell B  --step VOXELS  --strict
+  scheme     --tolerance F  --b0-threshold F  --shell B  --step VOXELS
+             --margin-threshold F  --strict
   output     --report FILE  --figures DIR (HTML report + figure PNGs)
   batch      --bids DIR (audit a whole BIDS tree)  --profile (per-stage timing) [audit]
   repair     --out-bvec FILE  --out-bval FILE  --out-grad FILE  --provenance FILE
              --dry-run  --force  --force-repair
-  global     -h/--help  -v/--version
+  global     --nthreads N  -h/--help  -v/--version
 
 exit codes: 0 PASS/FLAG/repaired-WARN, 3 unrepaired WARN
 """
@@ -107,6 +108,12 @@ def _add_scheme_opts(
             type=float,
             default=None,
             help="coherence step in voxels (default scales ~4 mm with voxel size)",
+        )
+        p.add_argument(
+            "--margin-threshold",
+            type=float,
+            default=0.02,
+            help="relative margin for automatic repair (default 0.02 = 2%%)",
         )
     # --norm-tolerance drives the amplitude-encoded bvec check; detect-flip skips it.
     if norm_tol:
@@ -243,6 +250,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite the inputs (keeps .bak backups)",
     )
 
+    for command_parser in (parser, p_inspect, p_audit, p_flip, p_repair, p_recompute):
+        command_parser.add_argument(
+            "--nthreads",
+            type=int,
+            default=None if command_parser is parser else argparse.SUPPRESS,
+            metavar="N",
+            help="worker threads (positive integer; default: environment/automatic)",
+        )
     return parser
 
 
@@ -289,6 +304,7 @@ def _write_figures(
 
 
 def _print_profile(profile: dict[str, float]) -> None:
+    print(f"threads: {int(profile['threads'])}")
     print("profile (seconds):")
     for stage in ("decompress", "convert", "fit", "coherence", "other", "total"):
         print(f"  {stage:<10} {profile[stage]:8.3f}")
@@ -355,6 +371,7 @@ def _run_recompute(args: argparse.Namespace) -> int:
             out_bvec,
             out_bval,
             bvec=args.bvec,
+            threads=args.nthreads,
             bval=args.bval,
             grad=args.grad,
             out_grad=args.out_grad,
@@ -410,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "inspect":
             text = _gradlint.inspect(
                 bvec=args.bvec,
+                threads=args.nthreads,
                 bval=args.bval,
                 grad=args.grad,
                 tolerance=args.tolerance,
@@ -422,10 +440,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.bids:
                 summary = _gradlint.audit_bids(
                     args.bids,
+                    threads=args.nthreads,
                     tolerance=args.tolerance,
                     b0_threshold=args.b0_threshold,
                     shell=args.shell,
                     step=args.step,
+                    margin_threshold=args.margin_threshold,
                     strict=args.strict,
                     norm_tolerance=args.norm_tolerance,
                 )
@@ -442,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = audit_profiled(
                     args.dwi,
                     bvec=args.bvec,
+                    threads=args.nthreads,
                     bval=args.bval,
                     grad=args.grad,
                     mask=args.mask,
@@ -449,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
                     b0_threshold=args.b0_threshold,
                     shell=args.shell,
                     step=args.step,
+                    margin_threshold=args.margin_threshold,
                     strict=args.strict,
                     norm_tolerance=args.norm_tolerance,
                 )
@@ -463,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
                 text, glyphs = _gradlint.audit_with_glyphs(
                     args.dwi,
                     bvec=args.bvec,
+                    threads=args.nthreads,
                     bval=args.bval,
                     grad=args.grad,
                     mask=args.mask,
@@ -470,12 +493,14 @@ def main(argv: list[str] | None = None) -> int:
                     b0_threshold=args.b0_threshold,
                     shell=args.shell,
                     step=args.step,
+                    margin_threshold=args.margin_threshold,
                     strict=args.strict,
                     norm_tolerance=args.norm_tolerance,
                 )
             else:
                 text = _gradlint.audit(
                     bvec=args.bvec,
+                    threads=args.nthreads,
                     bval=args.bval,
                     grad=args.grad,
                     dwi=args.dwi,
@@ -484,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
                     b0_threshold=args.b0_threshold,
                     shell=args.shell,
                     step=args.step,
+                    margin_threshold=args.margin_threshold,
                     strict=args.strict,
                     norm_tolerance=args.norm_tolerance,
                 )
@@ -496,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             result = detect_flip(
                 args.dwi,
                 bvec=args.bvec,
+                threads=args.nthreads,
                 bval=args.bval,
                 grad=args.grad,
                 mask=args.mask,
@@ -503,6 +530,7 @@ def main(argv: list[str] | None = None) -> int:
                 b0_threshold=args.b0_threshold,
                 shell=args.shell,
                 step=args.step,
+                margin_threshold=args.margin_threshold,
             )
             if args.figures:
                 text, glyphs = result
@@ -515,6 +543,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.out_bvec,
                 args.out_bval,
                 bvec=args.bvec,
+                threads=args.nthreads,
                 bval=args.bval,
                 grad=args.grad,
                 mask=args.mask,
@@ -524,6 +553,7 @@ def main(argv: list[str] | None = None) -> int:
                 b0_threshold=args.b0_threshold,
                 shell=args.shell,
                 step=args.step,
+                margin_threshold=args.margin_threshold,
                 dry_run=args.dry_run,
                 in_place=args.force,
                 strict=args.strict,

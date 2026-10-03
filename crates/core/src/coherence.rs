@@ -40,12 +40,35 @@ pub fn coherence_index(
     mask: &[bool],
     config: CoherenceConfig,
 ) -> (f64, usize) {
-    let (ny, nz) = (shape[1], shape[2]);
-    let nvox = shape[0] * ny * nz;
+    let nvox = shape.iter().product();
+    coherence_sum(
+        shape,
+        v1,
+        mask,
+        config,
+        (0..nvox).into_par_iter().filter(|&lin| mask[lin]),
+    )
+}
 
-    let (sum, valid, pairs) = (0..nvox)
-        .into_par_iter()
-        .filter(|&lin| mask[lin])
+pub(crate) fn coherence_index_masked(
+    shape: [usize; 3],
+    v1: &[[f64; 3]],
+    mask: &[bool],
+    config: CoherenceConfig,
+    indices: &[usize],
+) -> (f64, usize) {
+    coherence_sum(shape, v1, mask, config, indices.par_iter().copied())
+}
+
+fn coherence_sum(
+    shape: [usize; 3],
+    v1: &[[f64; 3]],
+    mask: &[bool],
+    config: CoherenceConfig,
+    indices: impl ParallelIterator<Item = usize>,
+) -> (f64, usize) {
+    let (ny, nz) = (shape[1], shape[2]);
+    let (sum, valid, pairs) = indices
         .map(|lin| {
             let v = v1[lin];
             if norm(v) < MIN_NORM {

@@ -793,6 +793,7 @@ mod tests {
             identity_coherence: 0.9,
             margin: 0.1,
             relative_margin: 0.1,
+            margin_threshold: None,
             decision: Decision::Pass,
             recommended_transform: None,
             recommended_label: None,

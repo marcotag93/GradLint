@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import struct
 from pathlib import Path
@@ -155,6 +156,89 @@ def test_detect_flip_returns_ranking(dataset: dict[str, str]) -> None:
     report = gg.detect_flip(dataset["dwi"], dataset["bvec"], dataset["bval"])
     assert report.flip is not None
     assert len(report.flip.ranking) == 48
+
+
+def test_margin_threshold_changes_verdict_not_candidate(
+    dataset: dict[str, str], tmp_path: Path
+) -> None:
+    import json
+
+    from gradlint.cli import main
+
+    baseline = gg.detect_flip(dataset["dwi"], dataset["bvec_flipped"], dataset["bval"])
+    assert baseline.flip is not None
+    assert not baseline.flip.best.is_identity
+    margin = baseline.flip.relative_margin
+    assert 0 < margin < 1
+    low_value = margin / 2
+    high_value = (margin + 1) / 2
+    low = gg.detect_flip(
+        dataset["dwi"],
+        dataset["bvec_flipped"],
+        dataset["bval"],
+        margin_threshold=low_value,
+    )
+    report_path = tmp_path / "high_threshold.json"
+    exit_code = main(
+        [
+            "detect-flip",
+            "--dwi",
+            dataset["dwi"],
+            "--bvec",
+            dataset["bvec_flipped"],
+            "--bval",
+            dataset["bval"],
+            "--margin-threshold",
+            str(high_value),
+            "--report",
+            str(report_path),
+        ]
+    )
+    high = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 3
+    assert low.status == "FLAG"
+    assert high["status"] == "WARN"
+    assert low.flip is not None
+    assert low.flip.best.label == baseline.flip.best.label
+    assert high["flip"]["best"]["label"] == baseline.flip.best.label
+    assert low.flip.margin_threshold == low_value
+    assert high["flip"]["margin_threshold"] == high_value
+    assert high["flip"]["relative_margin"] == pytest.approx(margin)
+
+    low_bvec = tmp_path / "low.bvec"
+    low_bval = tmp_path / "low.bval"
+    low_repair = gg.repair(
+        dataset["dwi"],
+        str(low_bvec),
+        str(low_bval),
+        bvec=dataset["bvec_flipped"],
+        bval=dataset["bval"],
+        margin_threshold=low_value,
+    )
+    high_bvec = tmp_path / "high.bvec"
+    high_bval = tmp_path / "high.bval"
+    high_repair = gg.repair(
+        dataset["dwi"],
+        str(high_bvec),
+        str(high_bval),
+        bvec=dataset["bvec_flipped"],
+        bval=dataset["bval"],
+        margin_threshold=high_value,
+    )
+    assert low_repair.status == "FLAG"
+    assert low_bvec.exists() and low_bval.exists()
+    assert high_repair.status == "WARN"
+    assert not high_bvec.exists() and not high_bval.exists()
+
+
+def test_invalid_margin_threshold_is_rejected(dataset: dict[str, str]) -> None:
+    with pytest.raises(ValueError, match="margin threshold"):
+        gg.detect_flip(
+            dataset["dwi"],
+            dataset["bvec_flipped"],
+            dataset["bval"],
+            margin_threshold=float("nan"),
+        )
 
 
 def test_cli_figures_include_glyph_png_and_html(
@@ -320,3 +404,80 @@ def test_all_b0_no_false_positive(tmp_path: Path) -> None:
     assert report.status == "PASS"
     assert report.norm_stats is not None
     assert report.norm_stats.non_b0_count == 0
+
+
+def test_thread_pools_preserve_reports_and_repairs(
+    dataset: dict[str, str], tmp_path: Path
+) -> None:
+    from gradlint import _gradlint
+
+    kwargs = dict(
+        dwi=dataset["dwi"],
+        bvec=dataset["bvec_flipped"],
+        bval=dataset["bval"],
+    )
+    baseline_json, default_profile = _gradlint.audit_profiled(**kwargs)
+    baseline = json.loads(baseline_json)
+    expected_scores = {
+        row["label"]: row["coherence"] for row in baseline["flip"]["ranking"]
+    }
+    repaired = []
+    for threads in (1, 2, 4, 8, 16, 1):
+        raw, profile = _gradlint.audit_profiled(**kwargs, threads=threads)
+        report = json.loads(raw)
+        assert profile["threads"] == threads
+        assert report.keys() == baseline.keys()
+        assert report["status"] == baseline["status"]
+        assert report["flip"]["decision"] == baseline["flip"]["decision"]
+        assert report["flip"]["margin"] == pytest.approx(
+            baseline["flip"]["margin"], abs=1e-12
+        )
+        scores = {row["label"]: row["coherence"] for row in report["flip"]["ranking"]}
+        assert scores == pytest.approx(expected_scores, abs=1e-12)
+        bvec = tmp_path / f"{len(repaired)}.bvec"
+        bval = tmp_path / f"{len(repaired)}.bval"
+        gg.repair(out_bvec=str(bvec), out_bval=str(bval), **kwargs, threads=threads)
+        repaired.append((bvec.read_bytes(), bval.read_bytes()))
+        withheld_bvec = tmp_path / f"warn-{len(repaired)}.bvec"
+        withheld_bval = tmp_path / f"warn-{len(repaired)}.bval"
+        withheld = gg.repair(
+            out_bvec=str(withheld_bvec),
+            out_bval=str(withheld_bval),
+            **kwargs,
+            threads=threads,
+            margin_threshold=1.0,
+        )
+        assert withheld.status == "WARN"
+        assert not withheld_bvec.exists()
+        assert not withheld_bval.exists()
+    assert all(files == repaired[0] for files in repaired)
+    _, profile = _gradlint.audit_profiled(**kwargs)
+    assert profile["threads"] == default_profile["threads"]
+
+
+def test_nthreads_cli_and_invalid_count(
+    dataset: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    from gradlint.cli import main
+
+    args = [
+        "audit",
+        "--bvec",
+        dataset["bvec"],
+        "--bval",
+        dataset["bval"],
+        "--dwi",
+        dataset["dwi"],
+        "--profile",
+    ]
+    for count, arguments in (
+        (1, ["--nthreads", "1"] + args),
+        (2, args + ["--nthreads", "2"]),
+    ):
+        assert main(arguments) == 0
+        assert f"threads: {count}" in capsys.readouterr().out
+    assert main(args + ["--nthreads", "0"]) == 1
+    assert main(["audit", "--bids", dataset["dir"], "--nthreads", "0"]) == 1
+    assert "positive integer" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="positive integer"):
+        gg.audit(dataset["bvec"], dataset["bval"], threads=0)

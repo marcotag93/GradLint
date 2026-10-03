@@ -6,7 +6,7 @@ use ndarray::ArrayD;
 use serde::{Deserialize, Serialize};
 
 use crate::candidate::all_candidates;
-use crate::coherence::{coherence_index, CoherenceConfig};
+use crate::coherence::{coherence_index_masked, CoherenceConfig};
 use crate::error::{Error, Result};
 use crate::frame::IDENTITY;
 use crate::gradient::{norm, GradientTable};
@@ -83,6 +83,9 @@ pub struct FlipResult {
     pub margin: f64,
     /// Relative coherence margin, best over runner-up.
     pub relative_margin: f64,
+    /// Present when the run overrides the 2% default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin_threshold: Option<f64>,
     pub decision: Decision,
     /// Recommended repair matrix and label, present only on `Flag`.
     pub recommended_transform: Option<[[f64; 3]; 3]>,
@@ -115,21 +118,39 @@ pub fn rank_candidates(
     config: CoherenceConfig,
     frame_map: &[[f64; 3]; 3],
 ) -> Vec<CandidateScore> {
-    let mut scores: Vec<CandidateScore> = all_candidates()
+    let indices: Vec<usize> = mask
         .iter()
-        .map(|c| {
-            let combined = compose(frame_map, &c.matrix);
-            let transformed = transform_field(&field.v1, &combined);
-            let (coherence, n_samples) = coherence_index(field.shape, &transformed, mask, config);
-            CandidateScore {
-                label: c.label.clone(),
-                matrix: c.matrix,
-                is_identity: c.is_identity,
-                coherence,
-                n_samples,
-            }
-        })
+        .enumerate()
+        .filter_map(|(i, &keep)| keep.then_some(i))
         .collect();
+    let mut transformed = vec![[0.0; 3]; field.v1.len()];
+    let mut scores: Vec<CandidateScore> = Vec::with_capacity(48);
+    for c in all_candidates() {
+        let (coherence, n_samples) = if let Some(twin) = scores
+            .iter()
+            .find(|s| antipodal_or_equal(&s.matrix, &c.matrix))
+        {
+            (twin.coherence, twin.n_samples)
+        } else {
+            let combined = compose(frame_map, &c.matrix);
+            for &i in &indices {
+                let v = field.v1[i];
+                transformed[i] = if norm(v) < MIN_NORM {
+                    v
+                } else {
+                    apply_matrix(&combined, v)
+                };
+            }
+            coherence_index_masked(field.shape, &transformed, mask, config, &indices)
+        };
+        scores.push(CandidateScore {
+            label: c.label,
+            matrix: c.matrix,
+            is_identity: c.is_identity,
+            coherence,
+            n_samples,
+        });
+    }
     scores.sort_by(|a, b| b.coherence.total_cmp(&a.coherence));
     scores
 }
@@ -331,6 +352,12 @@ fn fit_and_mask(
     shell: &Shell,
     config: FlipConfig,
 ) -> Result<(TensorField, Vec<bool>, usize, f64)> {
+    if !config.margin_threshold.is_finite()
+        || config.margin_threshold <= 0.0
+        || config.margin_threshold > 1.0
+    {
+        return Err(Error::InvalidMarginThreshold(config.margin_threshold));
+    }
     let b0_indices = table.b0_indices(config.shell.b0_threshold);
     let field = fit_dti(data, table, &b0_indices, &shell.indices, config.fit)?;
     let wm = match mask {
@@ -399,22 +426,12 @@ fn assemble_result(
         identity_coherence,
         margin,
         relative_margin,
+        margin_threshold: (margin_threshold != FlipConfig::default().margin_threshold)
+            .then_some(margin_threshold),
         decision,
         recommended_transform,
         recommended_label,
     }
-}
-
-fn transform_field(v1: &[[f64; 3]], matrix: &[[f64; 3]; 3]) -> Vec<[f64; 3]> {
-    v1.iter()
-        .map(|&v| {
-            if norm(v) < MIN_NORM {
-                v
-            } else {
-                apply_matrix(matrix, v)
-            }
-        })
-        .collect()
 }
 
 fn apply_matrix(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
@@ -440,6 +457,206 @@ mod tests {
     use super::*;
     use nalgebra::{Matrix3, Vector3};
     use ndarray::{Array, ArrayD, IxDyn};
+
+    use crate::coherence::coherence_index;
+
+    fn reference_ranking(
+        field: &TensorField,
+        mask: &[bool],
+        config: CoherenceConfig,
+        frame_map: &[[f64; 3]; 3],
+    ) -> Vec<CandidateScore> {
+        let mut scores: Vec<CandidateScore> = all_candidates()
+            .iter()
+            .map(|c| {
+                let combined = compose(frame_map, &c.matrix);
+                let transformed: Vec<_> = field
+                    .v1
+                    .iter()
+                    .map(|&v| {
+                        if norm(v) < MIN_NORM {
+                            v
+                        } else {
+                            apply_matrix(&combined, v)
+                        }
+                    })
+                    .collect();
+                let (coherence, n_samples) =
+                    coherence_index(field.shape, &transformed, mask, config);
+                CandidateScore {
+                    label: c.label.clone(),
+                    matrix: c.matrix,
+                    is_identity: c.is_identity,
+                    coherence,
+                    n_samples,
+                }
+            })
+            .collect();
+        scores.sort_by(|a, b| b.coherence.total_cmp(&a.coherence));
+        scores
+    }
+
+    fn ranking_fixture(n: usize) -> (TensorField, Vec<bool>) {
+        let nvox = n * n * n;
+        let v1 = (0..nvox)
+            .map(|i| {
+                if i % 31 == 0 {
+                    return [0.0; 3];
+                }
+                if i % 37 == 0 {
+                    return [1e-12, 0.0, 0.0];
+                }
+                let x = (i / (n * n)) as f64 / n as f64;
+                let y = ((i / n) % n) as f64 / n as f64;
+                let z = (i % n) as f64 / n as f64;
+                let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+                unit([sign * (0.2 + y), sign * (0.1 + z * x), sign * (0.3 + x)])
+            })
+            .collect();
+        let mask = (0..nvox)
+            .map(|i| i % 5 != 0 && (i / n) % n > n / 3)
+            .collect();
+        (
+            TensorField {
+                shape: [n; 3],
+                v1,
+                fa: vec![0.7; nvox],
+                s0: vec![1000.0; nvox],
+                valid: vec![true; nvox],
+            },
+            mask,
+        )
+    }
+
+    fn assert_ranking_parity(expected: &[CandidateScore], actual: &[CandidateScore]) {
+        assert_eq!(actual.len(), 48);
+        for a in actual {
+            let e = expected.iter().find(|e| e.label == a.label).unwrap();
+            assert_eq!(a.matrix, e.matrix);
+            assert_eq!(a.is_identity, e.is_identity);
+            assert_eq!(a.n_samples, e.n_samples);
+            assert!(
+                (a.coherence - e.coherence).abs() < 1e-12,
+                "{}: {} vs {}",
+                a.label,
+                a.coherence,
+                e.coherence
+            );
+        }
+        assert!(antipodal_or_equal(&expected[0].matrix, &actual[0].matrix));
+        assert!(antipodal_or_equal(
+            &runner_up(expected).unwrap().matrix,
+            &runner_up(actual).unwrap().matrix
+        ));
+        for threshold in [0.005, 0.02, 0.05, 1.0] {
+            let e = decide(expected, threshold);
+            let a = decide(actual, threshold);
+            assert_eq!(a.0, e.0);
+            assert!((a.1 - e.1).abs() < 1e-12);
+            assert!((a.2 - e.2).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn optimized_ranking_matches_full_grid_reference() {
+        let (field, sparse) = ranking_fixture(9);
+        let angle = 0.17_f64;
+        let (s, c) = angle.sin_cos();
+        let frames = [
+            IDENTITY,
+            [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+        ];
+        for threads in [1, 2] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for mask in [
+                        &sparse,
+                        &vec![true; field.v1.len()],
+                        &vec![false; field.v1.len()],
+                    ] {
+                        for frame in &frames {
+                            for step in [1.0, 2.3, 20.0] {
+                                let config = CoherenceConfig { step };
+                                let expected = reference_ranking(&field, mask, config, frame);
+                                let actual = rank_candidates(&field, mask, config, frame);
+                                assert_ranking_parity(&expected, &actual);
+                            }
+                        }
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn optimized_ranking_recovers_all_48_corruptions() {
+        let table = dwi_scheme();
+        let data = crossing(17, &[[3.0, 1.0, 2.0], [1.0, -2.0, 3.0]], 1.2, &table);
+        let shell = select_working_shell(&table, ShellConfig::default()).unwrap();
+        let (field, mask, _, _) =
+            fit_and_mask(&data, &table, None, &shell, FlipConfig::default()).unwrap();
+        let config = CoherenceConfig { step: 2.0 };
+        for candidate in all_candidates() {
+            let corrupted = TensorField {
+                v1: field
+                    .v1
+                    .iter()
+                    .map(|&v| apply_matrix(&candidate.matrix, v))
+                    .collect(),
+                ..field.clone()
+            };
+            let expected = reference_ranking(&corrupted, &mask, config, &IDENTITY);
+            let actual = rank_candidates(&corrupted, &mask, config, &IDENTITY);
+            assert_ranking_parity(&expected, &actual);
+            assert!(
+                antipodal_or_equal(&compose(&actual[0].matrix, &candidate.matrix), &IDENTITY),
+                "{}",
+                candidate.label
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "short paired ranking benchmark; run in release mode"]
+    fn benchmark_ranking() {
+        let (field, mask) = ranking_fixture(64);
+        let config = CoherenceConfig { step: 2.3 };
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let expected = reference_ranking(&field, &mask, config, &IDENTITY);
+            assert_ranking_parity(
+                &expected,
+                &rank_candidates(&field, &mask, config, &IDENTITY),
+            );
+            for repeat in 0..3 {
+                let mut times = [0.0; 2];
+                for path in if repeat % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let start = Instant::now();
+                    let scores = if path == 0 {
+                        reference_ranking(&field, &mask, config, &IDENTITY)
+                    } else {
+                        rank_candidates(&field, &mask, config, &IDENTITY)
+                    };
+                    times[path] = start.elapsed().as_secs_f64();
+                    assert_ranking_parity(&expected, &scores);
+                    std::hint::black_box(scores);
+                }
+                eprintln!(
+                    "ranking pair {}: baseline={:.6}s optimized={:.6}s speedup={:.3}x",
+                    repeat + 1,
+                    times[0],
+                    times[1],
+                    times[0] / times[1]
+                );
+            }
+        });
+    }
 
     fn unit(v: [f64; 3]) -> [f64; 3] {
         let n = norm(v);
@@ -710,6 +927,17 @@ mod tests {
         let (decision, _, rel) = decide(&ranking, 0.02);
         assert_eq!(decision, Decision::Warn);
         assert!(rel < 0.02);
+    }
+
+    #[test]
+    fn changing_threshold_changes_decision_without_changing_ranking() {
+        let ranking = vec![score("-x+y+z", false, 0.90), score("+x+y+z", true, 0.891)];
+        let (low, _, margin) = decide(&ranking, 0.005);
+        let (high, _, _) = decide(&ranking, 0.02);
+        assert_eq!(ranking[0].label, "-x+y+z");
+        assert!((margin - 0.01).abs() < 1e-12);
+        assert_eq!(low, Decision::Flag);
+        assert_eq!(high, Decision::Warn);
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub mod candidate;
 pub mod coherence;
 pub mod consistency;
 pub mod error;
+pub mod execution;
 pub mod flip;
 pub mod frame;
 pub mod gradient;
@@ -23,6 +24,7 @@ pub use bids_batch::{BatchItem, BatchOutcome};
 pub use candidate::{all_candidates, Candidate, N_CANDIDATES};
 pub use coherence::{coherence_index, CoherenceConfig};
 pub use error::{Error, Result};
+pub use execution::Execution;
 pub use flip::{
     decide, detect_flip, detect_flip_on_shell, detect_flip_on_shell_timed,
     detect_flip_on_shell_timed_with_glyphs, detect_flip_on_shell_with_glyphs, detect_flip_timed,

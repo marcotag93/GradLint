@@ -280,6 +280,7 @@ mod tests {
             identity_coherence: 0.4,
             margin: 0.2,
             relative_margin: 0.2,
+            margin_threshold: None,
             decision,
             recommended_transform,
             recommended_label,

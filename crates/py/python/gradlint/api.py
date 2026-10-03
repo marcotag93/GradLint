@@ -22,6 +22,7 @@ def inspect(
     shell: float | None = None,
     strict: bool = False,
     norm_tolerance: float = 0.05,
+    threads: int | None = None,
 ) -> Report:
     """Scheme-only QC (shells + angular metrics); no image required."""
     return Report.from_json(
@@ -34,6 +35,7 @@ def inspect(
             shell=shell,
             strict=strict,
             norm_tolerance=norm_tolerance,
+            threads=threads,
         )
     )
 
@@ -49,8 +51,10 @@ def audit(
     b0_threshold: float = 50.0,
     shell: float | None = None,
     step: float | None = None,
+    margin_threshold: float = 0.02,
     strict: bool = False,
     norm_tolerance: float = 0.05,
+    threads: int | None = None,
 ) -> Report:
     """Full audit: scheme QC plus flip detection when ``dwi`` is given."""
     return Report.from_json(
@@ -64,8 +68,10 @@ def audit(
             b0_threshold=b0_threshold,
             shell=shell,
             step=step,
+            margin_threshold=margin_threshold,
             strict=strict,
             norm_tolerance=norm_tolerance,
+            threads=threads,
         )
     )
 
@@ -81,6 +87,8 @@ def detect_flip(
     b0_threshold: float = 50.0,
     shell: float | None = None,
     step: float | None = None,
+    margin_threshold: float = 0.02,
+    threads: int | None = None,
 ) -> Report:
     """Flip detection only (requires an image): a lean scheme + flip report."""
     return Report.from_json(
@@ -94,6 +102,8 @@ def detect_flip(
             b0_threshold=b0_threshold,
             shell=shell,
             step=step,
+            margin_threshold=margin_threshold,
+            threads=threads,
         )
     )
 
@@ -113,11 +123,13 @@ def repair(
     b0_threshold: float = 50.0,
     shell: float | None = None,
     step: float | None = None,
+    margin_threshold: float = 0.02,
     dry_run: bool = False,
     in_place: bool = False,
     strict: bool = False,
     force_repair: bool = False,
     norm_tolerance: float = 0.05,
+    threads: int | None = None,
 ) -> Report:
     """Audit and write a corrected table when a flip is flagged."""
     return Report.from_json(
@@ -135,11 +147,13 @@ def repair(
             b0_threshold=b0_threshold,
             shell=shell,
             step=step,
+            margin_threshold=margin_threshold,
             dry_run=dry_run,
             in_place=in_place,
             strict=strict,
             force_repair=force_repair,
             norm_tolerance=norm_tolerance,
+            threads=threads,
         )
     )
 
@@ -156,6 +170,7 @@ def recompute_bval(
     b0_threshold: float = 50.0,
     dry_run: bool = False,
     in_place: bool = False,
+    threads: int | None = None,
 ) -> dict[str, Any]:
     """Opt-in b-value recovery from amplitude-encoded bvecs (never run from repair)."""
     return json.loads(
@@ -170,5 +185,6 @@ def recompute_bval(
             b0_threshold=b0_threshold,
             dry_run=dry_run,
             in_place=in_place,
+            threads=threads,
         )
     )

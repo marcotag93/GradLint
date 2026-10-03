@@ -23,10 +23,6 @@ STATUS_COLORS = {"PASS": "#1a8a3a", "WARN": "#c77800", "FLAG": "#c0271b"}
 _DPI = 110
 _GLYPH_DPI = 160
 
-# Fixed relative-margin cut-off for an automatic repair (mirrors the Rust core).
-FLAG_THRESHOLD = 0.02
-
-
 def build_figures(
     report: Report, *, glyphs: dict[str, Any] | None = None
 ) -> dict[str, str]:
@@ -146,7 +142,7 @@ def margin_gauge(report: Report) -> str:
     flip = report.flip
     assert flip is not None
     margin = flip.relative_margin * 100.0
-    threshold = FLAG_THRESHOLD * 100.0
+    threshold = flip.margin_threshold * 100.0
     hi = max(margin, threshold) * 1.35
     bar_color = STATUS_COLORS.get(report.status, "#444444")
 

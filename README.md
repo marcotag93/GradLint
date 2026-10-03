@@ -13,6 +13,40 @@ audits the b-value and gradient scheme, and — when a flip is found — emits a
 gradient table together with a machine-readable provenance log. The input gradient files
 are never modified in place unless explicitly requested.
 
+## Author
+
+**Marco Tagliaferri** — PhD Candidate in Neuroscience  
+[Center for Mind/Brain Sciences (CIMeC)](https://www.cimec.unitn.it/), University of Trento, Italy
+
+[marco.tagliaferri@unitn.it](mailto:marco.tagliaferri@unitn.it) ·
+[marco.tagliaferri93@gmail.com](mailto:marco.tagliaferri93@gmail.com)
+
+## Citing GradLint
+
+If you use GradLint in your research, please cite the software:
+
+> Tagliaferri, M. (2026). *GradLint* [Computer software]. Zenodo. [https://doi.org/10.5281/zenodo.20847595](https://doi.org/10.5281/zenodo.20847595)
+
+BibTeX:
+
+```bibtex
+@software{Tagliaferri_GradLint_2026,
+  author    = {Tagliaferri, Marco},
+  title     = {GradLint},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.20847595},
+  url       = {https://doi.org/10.5281/zenodo.20847595}
+}
+```
+
+Citation metadata is provided in [CITATION.cff](CITATION.cff) and is available through
+GitHub's "Cite this repository" button. The DOI above identifies all versions;
+cite the specific release used in your analysis when available.
+
+> A manuscript describing GradLint is currently in preparation. This section will be
+> updated with the article citation once it is published.
+
 ## Install
 
 ```bash
@@ -83,6 +117,11 @@ GradLint is a single command-line tool with one importable Python package behind
 Every subcommand and flag below — including `--bids`, `--profile`, and `--figures` — is
 available from the same `gradlint` install; there is no separate or feature-reduced build.
 
+Use `--nthreads N` to choose the number of worker threads (for example,
+`--nthreads 8`); omit it to keep the default environment/automatic setting.
+The Python API accepts `threads=N`. With `--profile`, the effective worker
+count is printed alongside the timings.
+
 ### Command line
 
 ```bash
@@ -106,6 +145,10 @@ gradlint audit --bids /data/my_bids
 
 # Audit with a per-stage timing breakdown (decompress / convert / fit / coherence)
 gradlint audit --bvec dwi.bvec --bval dwi.bval --dwi dwi.nii.gz --profile
+
+# Use a 0.5% margin (the default is 2%)
+gradlint audit --bvec dwi.bvec --bval dwi.bval --dwi dwi.nii.gz \
+  --margin-threshold 0.005
 
 # Audit and write the HTML report, standard figures, and tensor glyph QC
 gradlint audit --bvec dwi.bvec --bval dwi.bval --dwi dwi.nii.gz \
@@ -133,6 +176,13 @@ that was not repaired and should be reviewed.
 A false repair on good data is the worst outcome, so detection is deliberately
 specificity-first: when the margin is ambiguous GradLint emits WARN rather than an
 automatic repair.
+
+`--margin-threshold F` sets the relative margin for automatic repair (default
+`0.02` = 2%; `0.005` = 0.5%) in `audit`, `detect-flip`, and `repair`, including
+BIDS audits. Higher values withhold more repairs as WARN; lower values permit
+more FLAG decisions without changing the candidate ranking. Nondefault values
+are recorded in `report.json` and shown in the margin figure so saved reports
+can be interpreted correctly.
 
 The `FLAG` verdict marks a flagged gradient table, not a tool failure. It is the
 verdict everywhere — terminal, rendered reports, and the `report.json` `status`
@@ -197,6 +247,7 @@ All options are long form: value-taking options are `--name value`, switches are
 - `--b0-threshold F` — b-value at/below which a volume counts as a b0 (default `50`).
 - `--shell B` — working shell for the DTI fit (default: auto-selected).
 - `--step VOXELS` — coherence sampling step; flip detection only (default: auto from voxel size).
+- `--margin-threshold F` — relative margin required for automatic repair; flip detection only (default `0.02` = 2%).
 - `--strict` — let a *severe* scheme finding promote PASS to WARN, and a majority amplitude-encoded bvec finding become a hard error.
 - `--norm-tolerance F` — per-direction unit-norm tolerance for the amplitude-encoded bvec check (default `0.05`).
 
@@ -292,28 +343,22 @@ second time. No metric logic is duplicated in Python.
 
 ## Validation
 
-GradLint was validated against MRtrix3 `dwigradcheck` on three real multi-shell DWI
-cohorts — HCP1200 (N = 105, 1.25 mm), a single-site acquisition (N = 57, 2 mm), and the
-OpenNeuro multiple-sclerosis dataset ds007908 (N = 28, 1.5 mm). Each tool's native flip
-check was run on the real acquired table of every subject (specificity), and on
-known-good data corrupted with an injected flip across a severity ladder of Rician noise
-and direction-count reduction (sensitivity).
+GradLint was compared with MRtrix3 `dwigradcheck` on three multi-shell DWI cohorts:
+HCP1200 (N = 105), single-site (N = 57), and OpenNeuro ds007908 (N = 28).
+Testing covered acquired tables and injected axis flips under Rician noise and
+direction-count reduction:
 
-Across the three cohorts GradLint produced **0 false repairs on 133 real gradient
-tables**, recovered the injected convention on **100 % of 1049 graded corrupted cases**,
-and agreed with `dwigradcheck` on the recovered orientation in **100 %** of comparisons
-(antipode-aware), while running **~4–6× faster** per subject. On oblique affines, GradLint
-resolves the gradient table into the image voxel frame, so its corrected b-vectors
-reproduce the ground-truth orientation exactly.
+- **0 false repairs** on 133 clean acquired tables.
+- **1106/1106 correct top-ranked conventions**, with 100% antipode-aware agreement
+  with `dwigradcheck`; all **1022 FLAG repairs** matched the oracle, while
+  **84 WARN cases** withheld repair.
+- Frame-aware FSL ↔ MRtrix emission passed all numerical comparisons in
+  **190/190 subjects** through both input routes.
 
-Frame-aware emission was also tested on the undegraded injected-flip case from every
-subject in these cohorts (N = 190). Repairs were run from format-native FSL and MRtrix
-inputs, with both output formats requested. Both routes recovered the expected correction
-and passed every numerical output comparison in **190/190 subjects**. Cross-format files
-matched MRtrix `mrinfo` exports within **1.20e-6** per component, and the two routes agreed
-within **1.0e-6** in both output formats. Same-format FSL output was byte-identical in
-190/190 cases. MRtrix output was numerically identical in 190/190 and byte-identical in
-190/190.
+With GradLint 1.1.5 and libdeflate, median paired speed-ups were **12.90–23.25×**
+at eight threads per tool and **5.27–8.91×** with automatic/default threading
+across the three manuscript timing groups. These results concern the tested
+axis flips; they do not establish repair safety for errors outside that model.
 
 ## Development
 
@@ -332,15 +377,6 @@ pytest
 
 `maturin develop` rebuilds the native extension into the current virtual environment on
 each call — use it while iterating on the Rust core.
-
-## Citing GradLint
-
-If you use GradLint in your research, please cite the software release. Citation metadata
-is provided in [CITATION.cff](CITATION.cff) and is resolved automatically by GitHub's
-"Cite this repository" button.
-
-> A manuscript describing GradLint is currently in preparation. This section will be
-> updated with the article citation once it is published.
 
 ## License
 

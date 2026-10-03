@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use ndarray::{ArrayD, Axis};
-use nifti::{InMemNiftiObject, IntoNdArray, NiftiHeader, NiftiObject, ReaderOptions};
+use nifti::{InMemNiftiVolume, IntoNdArray, NiftiHeader, NiftiObject, ReaderOptions};
 use rayon::prelude::*;
 
 use crate::error::Result;
@@ -153,8 +153,9 @@ fn qform_affine(h: &NiftiHeader) -> [[f64; 4]; 4] {
 
 /// Load an in-memory NIfTI object, the single read entry point for all readers.
 #[cfg(not(feature = "libdeflate"))]
-fn open_object(path: &Path) -> Result<InMemNiftiObject> {
-    Ok(ReaderOptions::new().read_file(path)?)
+fn open_object(path: &Path) -> Result<(NiftiHeader, InMemNiftiVolume)> {
+    let object = ReaderOptions::new().read_file(path)?;
+    Ok((object.header().clone(), object.into_volume()))
 }
 
 /// Load an in-memory NIfTI object, decompressing `.nii.gz` via libdeflate.
@@ -162,13 +163,14 @@ fn open_object(path: &Path) -> Result<InMemNiftiObject> {
 /// Any deviation from the fast path falls back to the default reader, so the
 /// result is byte-identical to [`ReaderOptions::read_file`] in all cases.
 #[cfg(feature = "libdeflate")]
-fn open_object(path: &Path) -> Result<InMemNiftiObject> {
+fn open_object(path: &Path) -> Result<(NiftiHeader, InMemNiftiVolume)> {
     if is_gz(path) {
         if let Some(object) = open_object_libdeflate(path) {
             return Ok(object);
         }
     }
-    Ok(ReaderOptions::new().read_file(path)?)
+    let object = ReaderOptions::new().read_file(path)?;
+    Ok((object.header().clone(), object.into_volume()))
 }
 
 #[cfg(feature = "libdeflate")]
@@ -179,7 +181,7 @@ fn is_gz(path: &Path) -> bool {
 }
 
 #[cfg(feature = "libdeflate")]
-fn open_object_libdeflate(path: &Path) -> Option<InMemNiftiObject> {
+fn open_object_libdeflate(path: &Path) -> Option<(NiftiHeader, InMemNiftiVolume)> {
     // The gzip ISIZE trailer wraps at 4 GB, so size the output from the header.
     let header = NiftiHeader::from_file(path).ok()?;
     let out_len = gz_uncompressed_len(&header).ok()?;
@@ -189,7 +191,55 @@ fn open_object_libdeflate(path: &Path) -> Option<InMemNiftiObject> {
         .gzip_decompress(&compressed, &mut out)
         .ok()?;
     drop(compressed);
-    InMemNiftiObject::from_reader(&out[..actual]).ok()
+    out.truncate(actual);
+    owned_payload::parse(out).ok()
+}
+
+#[cfg(feature = "libdeflate")]
+mod owned_payload {
+    use std::io::Cursor;
+
+    use nifti::object::GenericNiftiObject;
+    use nifti::volume::{FromSource, FromSourceOptions};
+    use nifti::{NiftiType, NiftiVolume};
+
+    use super::*;
+
+    struct OwnedVolume(InMemNiftiVolume);
+
+    impl FromSourceOptions for OwnedVolume {
+        type Options = ();
+    }
+
+    impl FromSource<Cursor<Vec<u8>>> for OwnedVolume {
+        fn from_reader(
+            reader: Cursor<Vec<u8>>,
+            header: &NiftiHeader,
+            (): (),
+        ) -> nifti::Result<Self> {
+            let offset = reader.position() as usize;
+            let mut bytes = reader.into_inner();
+            // Preserve the library's parsed payload offset and reuse the allocation.
+            bytes.copy_within(offset.., 0);
+            bytes.truncate(bytes.len() - offset);
+            InMemNiftiVolume::from_raw_data(header, bytes).map(Self)
+        }
+    }
+
+    impl NiftiVolume for OwnedVolume {
+        fn dim(&self) -> &[u16] {
+            self.0.dim()
+        }
+
+        fn data_type(&self) -> NiftiType {
+            self.0.data_type()
+        }
+    }
+
+    pub(super) fn parse(bytes: Vec<u8>) -> nifti::Result<(NiftiHeader, InMemNiftiVolume)> {
+        let object = GenericNiftiObject::<OwnedVolume>::from_reader(Cursor::new(bytes))?;
+        Ok((object.header().clone(), object.into_volume().0))
+    }
 }
 
 #[cfg(feature = "libdeflate")]
@@ -204,16 +254,14 @@ fn gz_uncompressed_len(header: &NiftiHeader) -> Result<usize> {
 /// `f32` storage halves the allocation versus `f64`; integer DWI converts to
 /// `f32` exactly, and all downstream arithmetic promotes to `f64` at use.
 pub fn read_volume(path: impl AsRef<Path>) -> Result<ArrayD<f32>> {
-    Ok(open_object(path.as_ref())?
-        .into_volume()
-        .into_ndarray::<f32>()?)
+    Ok(open_object(path.as_ref())?.1.into_ndarray::<f32>()?)
 }
 
 /// Read a NIfTI volume together with its geometry in a single pass.
 pub fn read_volume_with_info(path: impl AsRef<Path>) -> Result<(ArrayD<f32>, VolumeInfo)> {
-    let object = open_object(path.as_ref())?;
-    let info = from_header(object.header())?;
-    let data = object.into_volume().into_ndarray::<f32>()?;
+    let (header, volume) = open_object(path.as_ref())?;
+    let info = from_header(&header)?;
+    let data = volume.into_ndarray::<f32>()?;
     Ok((data, info))
 }
 
@@ -231,12 +279,12 @@ pub fn read_volume_with_info_timed(
     path: impl AsRef<Path>,
 ) -> Result<(ArrayD<f32>, VolumeInfo, ReadTimings)> {
     let t0 = Instant::now();
-    let object = open_object(path.as_ref())?;
-    let info = from_header(object.header())?;
+    let (header, volume) = open_object(path.as_ref())?;
+    let info = from_header(&header)?;
     let decompress = t0.elapsed();
 
     let t1 = Instant::now();
-    let data = object.into_volume().into_ndarray::<f32>()?;
+    let data = volume.into_ndarray::<f32>()?;
     let convert = t1.elapsed();
 
     Ok((
@@ -414,6 +462,92 @@ mod libdeflate_tests {
     use ndarray::Array;
     use nifti::writer::WriterOptions;
 
+    fn put(bytes: &mut [u8], offset: usize, value: &[u8], big_endian: bool) {
+        for (i, &byte) in value.iter().enumerate() {
+            let index = if big_endian { value.len() - 1 - i } else { i };
+            bytes[offset + index] = byte;
+        }
+    }
+
+    fn fixture(datatype: i16, big_endian: bool, extension: bool, slope: f32) -> Vec<u8> {
+        let bitpix: i16 = match datatype {
+            2 => 8,
+            4 | 512 => 16,
+            8 | 16 => 32,
+            64 => 64,
+            _ => unreachable!(),
+        };
+        let offset = if extension { 368 } else { 352 };
+        let mut bytes = vec![0; offset + 24 * bitpix as usize / 8];
+        put(&mut bytes, 0, &348_i32.to_le_bytes(), big_endian);
+        for (i, dim) in [4_i16, 2, 3, 2, 2, 1, 1, 1].iter().enumerate() {
+            put(&mut bytes, 40 + 2 * i, &dim.to_le_bytes(), big_endian);
+        }
+        put(&mut bytes, 70, &datatype.to_le_bytes(), big_endian);
+        put(&mut bytes, 72, &bitpix.to_le_bytes(), big_endian);
+        for (i, size) in [1_f32, 2., 3., 4., 1., 1., 1., 1.].iter().enumerate() {
+            put(&mut bytes, 76 + 4 * i, &size.to_le_bytes(), big_endian);
+        }
+        put(&mut bytes, 108, &(offset as f32).to_le_bytes(), big_endian);
+        put(&mut bytes, 112, &slope.to_le_bytes(), big_endian);
+        put(&mut bytes, 116, &13.25_f32.to_le_bytes(), big_endian);
+        bytes[344..348].copy_from_slice(b"n+1\0");
+        if extension {
+            bytes[348] = 1;
+            put(&mut bytes, 352, &16_i32.to_le_bytes(), big_endian);
+            put(&mut bytes, 356, &6_i32.to_le_bytes(), big_endian);
+        }
+        for i in 0..24 {
+            let v = i as f64 - 12.125;
+            let value = match datatype {
+                2 => vec![i as u8],
+                4 => (v as i16).to_le_bytes().to_vec(),
+                512 => (i as u16).to_le_bytes().to_vec(),
+                8 => (v as i32 * 10000001).to_le_bytes().to_vec(),
+                16 => (v as f32).to_le_bytes().to_vec(),
+                64 => v.to_le_bytes().to_vec(),
+                _ => unreachable!(),
+            };
+            put(&mut bytes, offset + i * value.len(), &value, big_endian);
+        }
+        bytes
+    }
+
+    #[test]
+    fn owned_payload_preserves_scaling_types_endianness_and_layout() {
+        for datatype in [2, 4, 512, 8, 16, 64] {
+            for big_endian in [false, true] {
+                for extension in [false, true] {
+                    for slope in [0., 1., -2.5] {
+                        let bytes = fixture(datatype, big_endian, extension, slope);
+                        let reference = nifti::InMemNiftiObject::from_reader(&bytes[..]).unwrap();
+                        let (header, volume) = owned_payload::parse(bytes).unwrap();
+                        assert_eq!(
+                            from_header(&header).unwrap(),
+                            from_header(reference.header()).unwrap()
+                        );
+                        let expected = reference.into_volume().into_ndarray::<f32>().unwrap();
+                        let actual = volume.into_ndarray::<f32>().unwrap();
+                        assert_eq!(actual.shape(), expected.shape());
+                        assert_eq!(actual.strides(), expected.strides());
+                        assert!(actual
+                            .iter()
+                            .zip(expected.iter())
+                            .all(|(a, b)| a.to_bits() == b.to_bits()));
+                        assert_eq!(mask_from_volume(&actual), mask_from_volume(&expected));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn owned_payload_rejects_truncated_data() {
+        let mut bytes = fixture(16, false, false, 1.);
+        bytes.pop();
+        assert!(owned_payload::parse(bytes).is_err());
+    }
+
     #[test]
     fn libdeflate_read_matches_reference() {
         let dir = tempfile::tempdir().unwrap();
@@ -427,7 +561,7 @@ mod libdeflate_tests {
 
         let fast = open_object_libdeflate(&path)
             .expect("libdeflate fast path engaged")
-            .into_volume()
+            .1
             .into_ndarray::<f32>()
             .unwrap();
         let reference = ReaderOptions::new()

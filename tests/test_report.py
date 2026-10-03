@@ -386,6 +386,23 @@ def test_build_figures_includes_margin_gauge() -> None:
     assert all(uri.startswith("data:image/png;base64,") for uri in figures.values())
 
 
+def test_margin_figure_uses_report_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("matplotlib")
+    import matplotlib.pyplot as plt
+
+    from gradlint.report import figures
+
+    payload = sample_report()
+    payload["flip"]["margin_threshold"] = 0.05
+    report = Report.from_dict(payload)
+    assert report.flip is not None
+    assert report.flip.margin_threshold == 0.05
+    monkeypatch.setattr(figures, "_encode", lambda fig: fig)
+    fig = figures.margin_gauge(report)
+    assert "5% repair threshold" in [item.get_text() for item in fig.axes[0].texts]
+    plt.close(fig)
+
+
 def test_glyph_figure_is_opt_in_and_embedded_in_html() -> None:
     pytest.importorskip("matplotlib")
     from gradlint.report.figures import build_figures

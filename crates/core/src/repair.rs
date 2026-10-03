@@ -158,6 +158,7 @@ mod tests {
             identity_coherence: 0.5,
             margin: 0.1,
             relative_margin: 0.1,
+            margin_threshold: None,
             decision,
             recommended_transform,
             recommended_label,
