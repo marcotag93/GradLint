@@ -469,13 +469,27 @@ def test_glyph_vectors_are_transformed_after_cropping() -> None:
     )
 
 
+def test_repair_entry_points_are_removed() -> None:
+    import gradlint
+    from gradlint import _gradlint, api
+    from gradlint.cli import build_parser
+
+    for module in (gradlint, api, _gradlint):
+        assert not hasattr(module, "repair")
+        assert not hasattr(module, "repair_with_glyphs")
+    assert "repair" not in gradlint.__all__
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(["repair"])
+    assert error.value.code == 2
+
+
 def test_force_replaces_in_place_cli_flag() -> None:
     from gradlint.cli import build_parser
 
     parser = build_parser()
     args = parser.parse_args(
         [
-            "repair",
+            "audit",
             "--dwi",
             "dwi.nii.gz",
             "--bvec",
@@ -493,7 +507,7 @@ def test_force_replaces_in_place_cli_flag() -> None:
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
-                "repair",
+                "audit",
                 "--dwi",
                 "dwi.nii.gz",
                 "--out-bvec",

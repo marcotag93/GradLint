@@ -351,6 +351,15 @@ def correction_presentation(report: Report) -> CorrectionPresentation | None:
             glyph_title="CORRECTED TABLE — applied",
             summary="FLAG — correction applied.",
         )
+    if decision == "FLAG" and report.status == "WARN":
+        return CorrectionPresentation(
+            kind="withheld",
+            glyph_title="BEST CANDIDATE PREVIEW — not applied",
+            summary=(
+                "WARN — correction withheld; --apply-repair is required after "
+                "verifying volume-to-gradient pairing."
+            ),
+        )
     if decision == "WARN":
         return CorrectionPresentation(
             kind="withheld",

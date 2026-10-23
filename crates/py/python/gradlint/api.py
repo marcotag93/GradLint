@@ -55,8 +55,16 @@ def audit(
     strict: bool = False,
     norm_tolerance: float = 0.05,
     threads: int | None = None,
+    apply_repair: bool = False,
+    force_repair: bool = False,
+    dry_run: bool = False,
+    in_place: bool = False,
+    out_bvec: str | None = None,
+    out_bval: str | None = None,
+    out_grad: str | None = None,
+    provenance: str | None = None,
 ) -> Report:
-    """Full audit: scheme QC plus flip detection when ``dwi`` is given."""
+    """Audit, withholding nonidentity corrections unless explicitly authorized."""
     return Report.from_json(
         _gradlint.audit(
             bvec=bvec,
@@ -72,6 +80,14 @@ def audit(
             strict=strict,
             norm_tolerance=norm_tolerance,
             threads=threads,
+            apply_repair=apply_repair,
+            force_repair=force_repair,
+            dry_run=dry_run,
+            in_place=in_place,
+            out_bvec=out_bvec,
+            out_bval=out_bval,
+            out_grad=out_grad,
+            provenance=provenance,
         )
     )
 
@@ -108,56 +124,6 @@ def detect_flip(
     )
 
 
-def repair(
-    dwi: str,
-    out_bvec: str,
-    out_bval: str,
-    bvec: str | None = None,
-    bval: str | None = None,
-    *,
-    grad: str | None = None,
-    mask: str | None = None,
-    out_grad: str | None = None,
-    provenance: str | None = None,
-    tolerance: float = 0.05,
-    b0_threshold: float = 50.0,
-    shell: float | None = None,
-    step: float | None = None,
-    margin_threshold: float = 0.02,
-    dry_run: bool = False,
-    in_place: bool = False,
-    strict: bool = False,
-    force_repair: bool = False,
-    norm_tolerance: float = 0.05,
-    threads: int | None = None,
-) -> Report:
-    """Audit and write a corrected table when a flip is flagged."""
-    return Report.from_json(
-        _gradlint.repair(
-            dwi,
-            out_bvec,
-            out_bval,
-            bvec=bvec,
-            bval=bval,
-            grad=grad,
-            mask=mask,
-            out_grad=out_grad,
-            provenance=provenance,
-            tolerance=tolerance,
-            b0_threshold=b0_threshold,
-            shell=shell,
-            step=step,
-            margin_threshold=margin_threshold,
-            dry_run=dry_run,
-            in_place=in_place,
-            strict=strict,
-            force_repair=force_repair,
-            norm_tolerance=norm_tolerance,
-            threads=threads,
-        )
-    )
-
-
 def recompute_bval(
     out_bvec: str,
     out_bval: str,
@@ -172,7 +138,7 @@ def recompute_bval(
     in_place: bool = False,
     threads: int | None = None,
 ) -> dict[str, Any]:
-    """Opt-in b-value recovery from amplitude-encoded bvecs (never run from repair)."""
+    """Opt-in b-value recovery from amplitude-encoded bvecs (never run from audit)."""
     return json.loads(
         _gradlint.recompute_bval(
             out_bvec,

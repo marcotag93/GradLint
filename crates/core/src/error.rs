@@ -26,6 +26,9 @@ pub enum Error {
     #[error("mask grid mismatch: mask has {mask} voxels but the DWI grid has {expected}")]
     MaskShapeMismatch { mask: usize, expected: usize },
 
+    #[error("{0}")]
+    InvalidRepairRequest(String),
+
     #[error("threads must be a positive integer")]
     InvalidThreads,
 

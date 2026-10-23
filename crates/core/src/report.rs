@@ -222,7 +222,9 @@ impl Report {
     /// Pipeline gate exit code: block only when WARN has no applied repair.
     #[must_use]
     pub fn exit_code(&self) -> i32 {
-        if self.status == Status::Warn && self.repair.is_none() {
+        if self.status == Status::Warn
+            && self.repair.as_ref().map_or(true, |r| r.outputs.is_empty())
+        {
             3
         } else {
             0

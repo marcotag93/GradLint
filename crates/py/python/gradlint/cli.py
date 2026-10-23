@@ -24,13 +24,13 @@ _REPAIR_COLOR = 117
 _EPILOG = """\
 flags (see `gradlint <command> -h` for the per-command list):
   gradients  --bvec FILE  --bval FILE  --grad FILE (MRtrix .b)
-  image      --dwi FILE  --mask FILE   [audit/detect-flip/repair]
+  image      --dwi FILE  --mask FILE   [audit/detect-flip]
   scheme     --tolerance F  --b0-threshold F  --shell B  --step VOXELS
              --margin-threshold F  --strict
   output     --report FILE  --figures DIR (HTML report + figure PNGs)
   batch      --bids DIR (audit a whole BIDS tree)  --profile (per-stage timing) [audit]
-  repair     --out-bvec FILE  --out-bval FILE  --out-grad FILE  --provenance FILE
-             --dry-run  --force  --force-repair
+  audit fix  --out-bvec FILE  --out-bval FILE  --out-grad FILE  --provenance FILE
+             --dry-run  --apply-repair  --force  --force-repair
   global     --nthreads N  -h/--help  -v/--version
 
 exit codes: 0 PASS/FLAG/repaired-WARN, 3 unrepaired WARN
@@ -113,7 +113,7 @@ def _add_scheme_opts(
             "--margin-threshold",
             type=float,
             default=0.02,
-            help="relative margin for automatic repair (default 0.02 = 2%%)",
+            help="relative margin for a FLAG decision (default 0.02 = 2%%)",
         )
     # --norm-tolerance drives the amplitude-encoded bvec check; detect-flip skips it.
     if norm_tol:
@@ -136,6 +136,33 @@ def _add_strict(p: argparse.ArgumentParser) -> None:
         "--strict",
         action="store_true",
         help="promote severe scheme-quality issues to WARN (notes emitted regardless)",
+    )
+
+
+def _add_repair_opts(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--out-bvec", help="corrected bvec output")
+    parser.add_argument("--out-bval", help="corrected bval output")
+    parser.add_argument("--out-grad", help="also write a corrected MRtrix .b table")
+    parser.add_argument("--provenance", help="write a provenance log here")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="compute the repair but write nothing"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="allow existing output files to be overwritten (keeps .bak backups)",
+    )
+    parser.add_argument(
+        "--apply-repair",
+        action="store_true",
+        help="authorize writing after verifying volume-to-gradient pairing; "
+        "without this option nonidentity corrections are withheld (exit 3)",
+    )
+    parser.add_argument(
+        "--force-repair",
+        action="store_true",
+        help="apply the correction on a WARN (thin-margin) decision too "
+        "(requires --apply-repair; verdict stays WARN)",
     )
 
 
@@ -183,6 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_scheme_opts(p_audit)
     _add_strict(p_audit)
+    _add_repair_opts(p_audit)
 
     p_flip = sub.add_parser(
         "detect-flip",
@@ -193,35 +221,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_gradients(p_flip)
     p_flip.add_argument("--mask", help="white-matter / brain mask NIfTI")
     _add_scheme_opts(p_flip, norm_tol=False)
-
-    p_repair = sub.add_parser(
-        "repair",
-        help="audit and write a corrected table when a flip is flagged",
-        allow_abbrev=False,
-    )
-    p_repair.add_argument("--dwi", required=True, help="DWI NIfTI")
-    _add_gradients(p_repair)
-    p_repair.add_argument("--mask", help="white-matter / brain mask NIfTI")
-    p_repair.add_argument("--out-bvec", required=True, help="corrected bvec output")
-    p_repair.add_argument("--out-bval", required=True, help="corrected bval output")
-    p_repair.add_argument("--out-grad", help="also write a corrected MRtrix .b table")
-    p_repair.add_argument("--provenance", help="write a provenance log here")
-    p_repair.add_argument(
-        "--dry-run", action="store_true", help="compute the repair but write nothing"
-    )
-    p_repair.add_argument(
-        "--force",
-        action="store_true",
-        help="allow existing output files to be overwritten (keeps .bak backups)",
-    )
-    p_repair.add_argument(
-        "--force-repair",
-        action="store_true",
-        help="apply the correction on a WARN (thin-margin) decision too "
-        "(verdict stays WARN)",
-    )
-    _add_scheme_opts(p_repair)
-    _add_strict(p_repair)
 
     p_recompute = sub.add_parser(
         "recompute-bval",
@@ -250,7 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite the inputs (keeps .bak backups)",
     )
 
-    for command_parser in (parser, p_inspect, p_audit, p_flip, p_repair, p_recompute):
+    for command_parser in (parser, p_inspect, p_audit, p_flip, p_recompute):
         command_parser.add_argument(
             "--nthreads",
             type=int,
@@ -420,6 +419,21 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
+    if args.command == "audit":
+        repair_options = (
+            args.apply_repair or args.force_repair or args.dry_run or args.force
+            or args.out_bvec or args.out_bval or args.out_grad or args.provenance
+        )
+        if repair_options and (args.bids or args.profile):
+            print(
+                "error: repair options are not supported with --bids or --profile",
+                file=sys.stderr,
+            )
+            return 1
+        if args.bids and args.profile:
+            print("error: --profile is not supported with --bids", file=sys.stderr)
+            return 1
+
     glyphs: dict[str, Any] | None = None
     try:
         if args.command == "recompute-bval":
@@ -496,6 +510,14 @@ def main(argv: list[str] | None = None) -> int:
                     margin_threshold=args.margin_threshold,
                     strict=args.strict,
                     norm_tolerance=args.norm_tolerance,
+                    apply_repair=args.apply_repair,
+                    force_repair=args.force_repair,
+                    dry_run=args.dry_run,
+                    in_place=args.force,
+                    out_bvec=args.out_bvec,
+                    out_bval=args.out_bval,
+                    out_grad=args.out_grad,
+                    provenance=args.provenance,
                 )
             else:
                 text = _gradlint.audit(
@@ -512,6 +534,14 @@ def main(argv: list[str] | None = None) -> int:
                     margin_threshold=args.margin_threshold,
                     strict=args.strict,
                     norm_tolerance=args.norm_tolerance,
+                    apply_repair=args.apply_repair,
+                    force_repair=args.force_repair,
+                    dry_run=args.dry_run,
+                    in_place=args.force,
+                    out_bvec=args.out_bvec,
+                    out_bval=args.out_bval,
+                    out_grad=args.out_grad,
+                    provenance=args.provenance,
                 )
         elif args.command == "detect-flip":
             detect_flip = (
@@ -531,34 +561,6 @@ def main(argv: list[str] | None = None) -> int:
                 shell=args.shell,
                 step=args.step,
                 margin_threshold=args.margin_threshold,
-            )
-            if args.figures:
-                text, glyphs = result
-            else:
-                text = result
-        else:  # repair
-            repair = _gradlint.repair_with_glyphs if args.figures else _gradlint.repair
-            result = repair(
-                args.dwi,
-                args.out_bvec,
-                args.out_bval,
-                bvec=args.bvec,
-                threads=args.nthreads,
-                bval=args.bval,
-                grad=args.grad,
-                mask=args.mask,
-                out_grad=args.out_grad,
-                provenance=args.provenance,
-                tolerance=args.tolerance,
-                b0_threshold=args.b0_threshold,
-                shell=args.shell,
-                step=args.step,
-                margin_threshold=args.margin_threshold,
-                dry_run=args.dry_run,
-                in_place=args.force,
-                strict=args.strict,
-                force_repair=args.force_repair,
-                norm_tolerance=args.norm_tolerance,
             )
             if args.figures:
                 text, glyphs = result

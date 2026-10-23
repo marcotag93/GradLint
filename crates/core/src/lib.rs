@@ -37,8 +37,7 @@ pub use frame::{
 pub use gradient::GradientTable;
 pub use pipeline::{
     apply_geometry, audit, audit_timed, audit_timed_with_glyphs, audit_with_glyphs, detect,
-    detect_with_glyphs, inspect, repair, repair_with_glyphs, AuditOptions, RepairOutput,
-    RepairSpec,
+    detect_with_glyphs, inspect, AuditOptions, RepairOutput, RepairSpec,
 };
 pub use repair::{apply_transform, prepare_output, Repair};
 pub use report::{RepairInfo, Report, SchemeTable, Status};

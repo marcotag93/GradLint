@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use gradlint_core::flip::{CandidateScore, Decision, FlipResult};
 use gradlint_core::io::provenance::InputFile;
 use gradlint_core::io::{fsl, mrtrix};
-use gradlint_core::pipeline::{self, AuditOptions, RecomputeSpec, RepairSpec};
+use gradlint_core::pipeline::{self, AuditOptions, RecomputeSpec};
 use gradlint_core::report::{self, BvalRecoverySummary, RepairInfo, Report, Status};
 use gradlint_core::{DetectTimings, GradientTable, ReadTimings, ShellConfig, VolumeInfo};
 
@@ -46,8 +46,6 @@ enum Command {
     Inspect(InspectArgs),
     /// Audit a DWI: scheme QC plus b-vector flip detection.
     Audit(AuditArgs),
-    /// Audit and write a corrected gradient table when a flip is flagged.
-    Repair(RepairArgs),
     /// Recover amplitude-encoded b-values into a corrected bval + unit bvec.
     RecomputeBval(RecomputeArgs),
 }
@@ -79,7 +77,7 @@ struct SchemeOpts {
     /// Coherence step length in voxels (default scales ~4 mm with voxel size).
     #[arg(long, value_name = "VOXELS")]
     step: Option<f64>,
-    /// Relative margin required for an automatic repair (0.02 = 2%).
+    /// Relative margin required for a FLAG decision (0.02 = 2%).
     #[arg(long = "margin-threshold", default_value_t = 0.02)]
     margin_threshold: f64,
     /// Promote severe scheme-quality issues (conditioning, direction count, b0
@@ -123,21 +121,13 @@ struct AuditArgs {
     /// Print a stage-timing breakdown (decompress/convert/fit/coherence).
     #[arg(long)]
     profile: bool,
+    #[command(flatten)]
+    write: RepairOptions,
 }
 
 #[derive(Args)]
-struct RepairArgs {
-    #[command(flatten)]
-    input: GradientInput,
-    /// DWI NIfTI (required).
-    #[arg(long, value_name = "FILE")]
-    dwi: PathBuf,
-    /// White-matter / brain mask NIfTI.
-    #[arg(long, value_name = "FILE")]
-    mask: Option<PathBuf>,
-    #[command(flatten)]
-    opts: SchemeOpts,
-    /// Corrected bvec output (default: alongside the input with a .repaired tag).
+struct RepairOptions {
+    /// Corrected bvec output; required for audit repair or dry run.
     #[arg(long = "out-bvec", value_name = "FILE")]
     out_bvec: Option<PathBuf>,
     /// Corrected bval output.
@@ -146,22 +136,37 @@ struct RepairArgs {
     /// Also write a corrected MRtrix .b table here.
     #[arg(long = "out-grad", value_name = "FILE")]
     out_grad: Option<PathBuf>,
-    /// Write the canonical report.json here.
-    #[arg(long, value_name = "FILE")]
-    report: Option<PathBuf>,
     /// Write a provenance log here.
     #[arg(long, value_name = "FILE")]
     provenance: Option<PathBuf>,
     /// Compute the repair but write nothing.
     #[arg(long = "dry-run")]
     dry_run: bool,
-    /// Overwrite the input files (a .bak backup is kept).
+    /// Allow overwriting the requested output files (keeps .bak backups).
     #[arg(long)]
     force: bool,
-    /// Apply the correction on a WARN (thin-margin) decision too, overriding the
-    /// conservative withhld. The verdict stays WARN; no effect on PASS.
+    /// Authorize writing after verifying volume-to-gradient pairing; otherwise
+    /// corrections are withheld with WARN and exit 3.
+    #[arg(long = "apply-repair")]
+    apply_repair: bool,
+    /// Also accept a WARN candidate (requires --apply-repair; verdict stays WARN).
     #[arg(long = "force-repair")]
     force_repair: bool,
+}
+
+impl RepairOptions {
+    fn request(&self) -> pipeline::RepairRequest {
+        pipeline::RepairRequest {
+            bvec: self.out_bvec.clone(),
+            bval: self.out_bval.clone(),
+            mrtrix: self.out_grad.clone(),
+            provenance: self.provenance.clone(),
+            apply_repair: self.apply_repair,
+            force_repair: self.force_repair,
+            dry_run: self.dry_run,
+            in_place: self.force,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -207,7 +212,6 @@ fn run() -> Result<i32, String> {
     execution.run(|| match cli.command {
         Command::Inspect(args) => run_inspect(args),
         Command::Audit(args) => run_audit(args),
-        Command::Repair(args) => run_repair(args),
         Command::RecomputeBval(args) => run_recompute(args),
     })
 }
@@ -220,6 +224,10 @@ fn run_inspect(args: InspectArgs) -> Result<i32, String> {
 }
 
 fn run_audit(args: AuditArgs) -> Result<i32, String> {
+    let request = args.write.request();
+    request
+        .validate(args.dwi.is_some(), args.bids.is_some(), args.profile)
+        .map_err(|e| e.to_string())?;
     if let Some(root) = &args.bids {
         if args.profile {
             return Err("--profile is not supported with --bids".to_string());
@@ -233,6 +241,7 @@ fn run_audit(args: AuditArgs) -> Result<i32, String> {
         let dwi = args.dwi.as_deref().ok_or("--profile requires --dwi")?;
         return run_audit_profiled(dwi, &table, &args, inputs, opts);
     }
+    let mut spec = None;
     let data = match args.dwi.as_deref() {
         Some(path) => {
             let (volume, info) = read_dwi_with_progress(path)?;
@@ -242,6 +251,10 @@ fn run_audit(args: AuditArgs) -> Result<i32, String> {
                 gradlint_core::frame_for(args.input.grad.is_some()),
                 args.opts.step,
             );
+            spec = request.resolve(gradlint_core::FrameMaps::resolve(
+                gradlint_core::frame_for(args.input.grad.is_some()),
+                &info,
+            ));
             Some(volume)
         }
         None => None,
@@ -251,10 +264,20 @@ fn run_audit(args: AuditArgs) -> Result<i32, String> {
         Some(volume) => {
             announce_mask(args.mask.as_deref());
             let hb = Heartbeat::start("detecting flip: one DTI fit + ranking all 48 conventions");
-            let report = pipeline::audit(&table, Some(&volume), mask.as_deref(), inputs, opts)
-                .map_err(|e| e.to_string())?;
+            let outcome = pipeline::audit_requested(
+                &table,
+                Some(&volume),
+                mask.as_deref(),
+                inputs,
+                opts,
+                spec.as_ref(),
+            )
+            .map_err(|e| e.to_string())?;
             hb.done();
-            report
+            for backup in &outcome.backups {
+                println!("backed up {}", backup.display());
+            }
+            outcome.report
         }
         None => pipeline::audit(&table, None, mask.as_deref(), inputs, opts)
             .map_err(|e| e.to_string())?,
@@ -299,30 +322,6 @@ fn run_audit_profiled(
         println!("report: {}", path.display());
     }
     Ok(report.exit_code())
-}
-
-fn run_repair(args: RepairArgs) -> Result<i32, String> {
-    let (table, inputs) = load_table(&args.input)?;
-    eprintln!("gradient table: {} volumes", table.len());
-    let (data, info) = read_dwi_with_progress(&args.dwi)?;
-    let mut opts = options(&args.opts);
-    let frame = gradlint_core::frame_for(args.input.grad.is_some());
-    pipeline::apply_geometry(&mut opts, &info, frame, args.opts.step);
-    announce_mask(args.mask.as_deref());
-    let mask = read_optional_mask(args.mask.as_deref())?;
-    let spec = repair_spec(&args, gradlint_core::FrameMaps::resolve(frame, &info))?;
-    let hb = Heartbeat::start("detecting flip + applying repair");
-    let outcome = pipeline::repair(&table, Some(&data), mask.as_deref(), inputs, opts, &spec)
-        .map_err(|e| e.to_string())?;
-    hb.done();
-
-    if args.force_repair && outcome.report.repair.is_none() {
-        eprintln!("note: --force-repair had no effect (nothing to repair).");
-    }
-    for backup in &outcome.backups {
-        println!("backed up {} ", backup.display());
-    }
-    finish(&outcome.report, args.report.as_deref())
 }
 
 fn run_recompute(args: RecomputeArgs) -> Result<i32, String> {
@@ -444,48 +443,6 @@ fn load_table(input: &GradientInput) -> Result<(GradientTable, Vec<InputFile>), 
     }
 }
 
-fn repair_spec(args: &RepairArgs, frame: gradlint_core::FrameMaps) -> Result<RepairSpec, String> {
-    let (bvec, bval) =
-        if args.force {
-            let bvec = args
-                .input
-                .bvec
-                .clone()
-                .ok_or("--force requires FSL --bvec/--bval inputs")?;
-            let bval = args
-                .input
-                .bval
-                .clone()
-                .ok_or("--force requires FSL --bvec/--bval inputs")?;
-            (bvec, bval)
-        } else {
-            match (&args.out_bvec, &args.out_bval) {
-                (Some(bvec), Some(bval)) => (bvec.clone(), bval.clone()),
-                _ => {
-                    let bvec =
-                        args.input.bvec.as_deref().ok_or(
-                            "specify --out-bvec/--out-bval (or FSL inputs to derive them)",
-                        )?;
-                    let bval =
-                        args.input.bval.as_deref().ok_or(
-                            "specify --out-bvec/--out-bval (or FSL inputs to derive them)",
-                        )?;
-                    (repaired_sibling(bvec), repaired_sibling(bval))
-                }
-            }
-        };
-    Ok(RepairSpec {
-        bvec,
-        bval,
-        mrtrix: args.out_grad.clone(),
-        provenance: args.provenance.clone(),
-        dry_run: args.dry_run,
-        in_place: args.force,
-        force_repair: args.force_repair,
-        frame: Some(frame),
-    })
-}
-
 /// Stderr "still working" heartbeat for a long stage, so the terminal is never
 /// silent.
 struct Heartbeat {
@@ -604,7 +561,13 @@ fn print_summary(report: &Report) {
         );
     }
     if let Some(flip) = &report.flip {
-        print_flip(flip, report.repair.is_some());
+        print_flip(
+            flip,
+            report
+                .repair
+                .as_ref()
+                .is_some_and(|r| !r.outputs.is_empty()),
+        );
     }
     if let Some(repair) = &report.repair {
         print_repair(repair);
@@ -676,14 +639,14 @@ fn print_decision(flip: &FlipResult, repair_followed: bool) {
             if let Some(label) = &flip.recommended_label {
                 println!("  recommended repair: {} (label {})", axis_remap(label), label);
                 if !repair_followed {
-                    println!("  run `gradlint repair ...` to write a corrected bvec/bval.");
+                    println!("  verify volume-to-gradient pairing, then run `gradlint audit ... --apply-repair` to write corrected gradients.");
                 }
             }
         }
     }
 }
 
-/// The repair block for the `repair` subcommand: what was changed and where.
+/// The correction block: what was changed and where.
 fn print_repair(repair: &RepairInfo) {
     let color = style::stdout_color();
     println!();
@@ -805,10 +768,6 @@ fn input_file(path: &Path) -> Result<InputFile, String> {
     InputFile::of(path).map_err(|e| e.to_string())
 }
 
-fn repaired_sibling(path: &Path) -> PathBuf {
-    tagged_sibling(path, "repaired")
-}
-
 fn tagged_sibling(path: &Path, tag: &str) -> PathBuf {
     let stem = path
         .file_stem()
@@ -826,15 +785,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repaired_sibling_inserts_tag() {
-        assert_eq!(
-            repaired_sibling(Path::new("/d/dwi.bvec")),
-            PathBuf::from("/d/dwi.repaired.bvec")
-        );
-        assert_eq!(
-            repaired_sibling(Path::new("grad")),
-            PathBuf::from("grad.repaired")
-        );
+    fn repair_command_is_removed() {
+        assert!(Cli::try_parse_from(["gradlint", "repair"]).is_err());
     }
 
     fn score(label: &str, matrix: [[f64; 3]; 3], coherence: f64) -> CandidateScore {

@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib.metadata import version as _pkg_version
 
 from ._gradlint import version as _core_version
-from .api import audit, detect_flip, inspect, recompute_bval, repair
+from .api import audit, detect_flip, inspect, recompute_bval
 from .report import Report, load_report, render_html, render_markdown
 
 __version__ = _pkg_version("gradlint")
@@ -20,7 +20,6 @@ __all__ = [
     "inspect",
     "audit",
     "detect_flip",
-    "repair",
     "recompute_bval",
 ]
 

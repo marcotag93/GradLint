@@ -6,8 +6,8 @@ authors:
   - given-names: Marco
     family-names: Tagliaferri
     email: marco.tagliaferri93@gmail.com
-version: 1.1.6
-date-released: 2026-10-04
+version: 1.1.7
+date-released: 2026-10-23
 license: MIT
 repository-code: "https://github.com/marcotag93/GradLint"
 url: "https://github.com/marcotag93/GradLint"

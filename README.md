@@ -9,8 +9,8 @@ Fast, standalone **gradient-scheme quality control**, **b-vector flip / axis-per
 detection**, and **auto-repair** for diffusion MRI.
 
 GradLint is a quality-control *gate*. It runs in seconds before a diffusion pipeline starts: it catches the silent wrong-`bvec` error,
-audits the b-value and gradient scheme, and — when a flip is found — emits a corrected
-gradient table together with a machine-readable provenance log. The input gradient files
+audits the b-value and gradient scheme, and — with `--apply-repair` — writes an authorized
+correction together with a machine-readable provenance log. The input gradient files
 are never modified in place unless explicitly requested.
 
 ---
@@ -65,7 +65,7 @@ pipx install gradlint
 Both routes install from the same pre-built PyPI wheels.
 
 This installs the single `gradlint` command — every subcommand (`inspect`, `audit`,
-`detect-flip`, `repair`, `recompute-bval`) and every flag — plus the importable `gradlint`
+`detect-flip`, `recompute-bval`) and every flag — plus the importable `gradlint`
 Python package.
 The command is a thin wrapper; all computation runs in the native Rust core compiled into
 the wheel. The published wheels are pure-Rust and need no C toolchain.
@@ -134,8 +134,8 @@ gradlint inspect --bvec dwi.bvec --bval dwi.bval
 gradlint audit --bvec dwi.bvec --bval dwi.bval --dwi dwi.nii.gz \
   --mask wm.nii.gz --report report.json
 
-# Repair a detected flip (writes a corrected copy; never touches the input)
-gradlint repair --bvec dwi.bvec --bval dwi.bval --dwi dwi.nii.gz \
+# Repair after verifying volume-to-gradient pairing (writes a corrected copy)
+gradlint audit --apply-repair --bvec dwi.bvec --bval dwi.bval --dwi dwi.nii.gz \
   --out-bvec dwi.fixed.bvec --out-bval dwi.fixed.bval --provenance prov.json
 
 # Opt-in: recover b-values hidden in amplitude-encoded bvec norms (separate from repair)
@@ -157,7 +157,7 @@ gradlint audit --bvec dwi.bvec --bval dwi.bval --dwi dwi.nii.gz \
   --figures qc_figures
 ```
 
-`audit` and `repair` rank all 48 candidate gradient conventions by fibre coherence,
+`audit` ranks all 48 candidate gradient conventions by fibre coherence,
 mark the current table and the best-scoring convention, and end with a one-line verdict.
 When a flip is detected, the fix is reported as a per-axis remap (e.g. `x=-x, y=+y, z=+z`).
 Progress streams to stderr; the machine-readable verdict goes to stdout, so the run is
@@ -165,22 +165,25 @@ safe to pipe.
 
 ### Outcomes
 
-GradLint returns one of three verdicts. The exit code is intended for pipeline gating:
-`0` means the workflow may continue, while `3` means GradLint found a WARN condition
-that was not repaired and should be reviewed.
+For `audit`, exit `0` allows continuation; exit `3` requires review.
 
-| Verdict        |                            Exit                            | Meaning                                                                                                                                                                                                                                              |
-| -------------- | :---------------------------------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PASS** |                            `0`                            | The gradient table is consistent with the image; no flip detected. Nothing is written.                                                                                                                                                               |
-| **WARN** | `3` when unrepaired, `0` with `repair --force-repair` | A likely issue with low confidence — the best convention's margin is below the auto-repair threshold. The repair is withheld unless `repair --force-repair` is used. With `--strict`, a severe scheme-quality finding also raises PASS to WARN. |
-| **FLAG** |                            `0`                            | A b-vector flip / axis-permutation is detected with high confidence.`repair` writes the corrected `bvec`/`bval` and a provenance log, allowing the downstream pipeline to continue with the repaired table.                                    |
+| Verdict | Exit | Meaning |
+| --- | --- | --- |
+| **PASS** | `0` | No orientation correction needed. |
+| **WARN** | `3`; `0` if corrected | Correction withheld or scheme-quality warning. |
+| **FLAG** | `0` | Confident flip; authorized correction written. |
+
+Writing requires `--apply-repair`; a thin-margin WARN also needs `--force-repair`.
+Without consent, nonidentity proposals return WARN/exit `3`; `flip.decision`
+retains the detector result. Verify volume-to-gradient pairing before applying
+corrections: GradLint cannot exclude reordering errors.
 
 A false repair on good data is the worst outcome, so detection is deliberately
 specificity-first: when the margin is ambiguous GradLint emits WARN rather than an
 automatic repair.
 
-`--margin-threshold F` sets the relative margin for automatic repair (default
-`0.02` = 2%; `0.005` = 0.5%) in `audit`, `detect-flip`, and `repair`, including
+`--margin-threshold F` sets the relative margin for a FLAG decision (default
+`0.02` = 2%; `0.005` = 0.5%) in `audit` and `detect-flip`, including
 BIDS audits. Higher values withhold more repairs as WARN; lower values permit
 more FLAG decisions without changing the candidate ranking. Nondefault values
 are recorded in `report.json` and shown in the margin figure so saved reports
@@ -188,9 +191,12 @@ can be interpreted correctly.
 
 The `FLAG` verdict marks a flagged gradient table, not a tool failure. It is the
 verdict everywhere — terminal, rendered reports, and the `report.json` `status`
-field — and maps to exit code `0`; use the corrected outputs from `repair`, not the
-original gradients, in downstream steps. `audit` and `detect-flip` do not write a
-repair, so production pipelines that should auto-correct should gate on `repair`.
+field when an authorized FLAG correction is written, with exit code `0`.
+Use the corrected outputs in downstream steps. Without write consent, `audit`
+returns overall WARN/exit `3` for a nonidentity proposal, including in BIDS and
+profiled runs; `flip.decision` still records FLAG or WARN. `detect-flip` remains
+a diagnostic-only command; use `audit` for the
+complete pipeline gate.
 
 **Masks.** Flip detection is most sensitive over white matter. With no `--mask`, GradLint
 derives a foreground-gated FA white-matter proxy automatically. A supplied `--mask` is
@@ -216,12 +222,12 @@ tunes the per-direction deviation threshold (default `0.05`).
 
 **Frame handling (FSL ↔ MRtrix).** Each gradient format is interpreted in its own stored
 frame: FSL `bvec` is image-relative (with the affine-determinant x-flip convention), MRtrix
-`.b` is in world/scanner coordinates. `repair` reads the input in its own frame, detects the
+`.b` is in world/scanner coordinates. `audit --apply-repair` reads the input in its own frame, detects the
 flip there, and emits **each requested output in that format's correct frame**, converting
 across formats through the image affine. So you can feed `--bvec/--bval` and ask for
 `--out-grad` (a true world `.b`), or feed `--grad` and ask for `--out-bvec` (a true FSL bvec),
 and both are correct — matching MRtrix's own `mrinfo -export_grad_{mrtrix,fsl}`. Same-format
-output is numerically unchanged. `--dwi` (already required by `repair`) supplies the
+output is numerically unchanged. `--dwi` (required when requesting repair) supplies the
 affine. When the image's FSL and world frames genuinely diverge (positive determinant
 with a multi-axis rotation, e.g. `diag(-2,-2,2)`), an advisory note is added so a
 cross-format hand-off is not applied blindly. (`recompute-bval` takes no image and so
@@ -238,7 +244,7 @@ All options are long form: value-taking options are `--name value`, switches are
 - `--bvec FILE --bval FILE` — FSL-style gradient table.
 - `--grad FILE` — MRtrix `.b` gradient table (used instead of `--bvec`/`--bval`).
 
-**Image input** (`audit`, `detect-flip`, `repair`):
+**Image input** (`audit`, `detect-flip`):
 
 - `--dwi FILE` — the diffusion-weighted NIfTI (`.nii` or `.nii.gz`).
 - `--mask FILE` — optional brain/WM mask; a WM mask gives the most sensitive detection.
@@ -249,7 +255,7 @@ All options are long form: value-taking options are `--name value`, switches are
 - `--b0-threshold F` — b-value at/below which a volume counts as a b0 (default `50`).
 - `--shell B` — working shell for the DTI fit (default: auto-selected).
 - `--step VOXELS` — coherence sampling step; flip detection only (default: auto from voxel size).
-- `--margin-threshold F` — relative margin required for automatic repair; flip detection only (default `0.02` = 2%).
+- `--margin-threshold F` — relative margin required for a FLAG decision; flip detection only (default `0.02` = 2%).
 - `--strict` — let a *severe* scheme finding promote PASS to WARN, and a majority amplitude-encoded bvec finding become a hard error.
 - `--norm-tolerance F` — per-direction unit-norm tolerance for the amplitude-encoded bvec check (default `0.05`).
 
@@ -258,15 +264,21 @@ All options are long form: value-taking options are `--name value`, switches are
 - `--report FILE` — write the canonical JSON report.
 - `--figures DIR` — write a self-contained `report.html` plus figure PNGs. Image-based commands also write `glyphs.png`: sagittal, coronal, and axial DTI principal-direction views comparing the input table with GradLint's best candidate, plus anatomical locator views. Titles distinguish an applied correction from a withheld, previewed, dry-run, or unnecessary correction. Rendering uses matplotlib and jinja2, imported **only** when this flag is given; without it, GradLint neither transfers tensor fields to Python nor loads plotting dependencies.
 
-**Repair only:**
+**Optional repair within `audit`:**
 
 - `--out-bvec FILE` / `--out-bval FILE` / `--out-grad FILE` — destinations for the corrected gradients.
 - `--provenance FILE` — write a JSON provenance log of the repair.
 - `--dry-run` — report what would change without writing anything.
 - `--force` — allow existing corrected output paths to be overwritten (a `.bak` backup is kept).
-- `--force-repair` — apply the best convention on a thin-margin WARN (write-side only; the verdict stays WARN, but the process exits `0` because a repair was produced).
+- `--apply-repair` — authorize correction writing.
+- `--force-repair` — also accept a thin-margin WARN; requires `--apply-repair`.
 
-**Recompute-bval only** (opt-in b-value recovery from amplitude-encoded bvecs; never run from `repair`):
+Writing and dry runs require `--dwi`, `--out-bvec`, and `--out-bval`.
+Output/provenance paths require `--apply-repair` or `--dry-run`.
+Repair options cannot be combined with `--bids` or `--profile`.
+Python: `audit(..., apply_repair=True)`.
+
+**Recompute-bval only** (opt-in b-value recovery from amplitude-encoded bvecs; never run from `audit`):
 
 - `--out-bvec FILE` / `--out-bval FILE` / `--out-grad FILE` — destinations for the recovered gradients (unit-normalized bvec + recovered bval). Defaults derive a `.recovered` sibling of the input.
 - `--b0-threshold F` — b-value at/below which a volume counts as a b0 (default `50`).
@@ -293,6 +305,13 @@ import gradlint as gg
 
 report = gg.audit("dwi.bvec", "dwi.bval", dwi="dwi.nii.gz")
 print(report.status, report.flip.best.label)
+
+# After checking volume-to-gradient pairing:
+fixed = gg.audit(
+    "dwi.bvec", "dwi.bval", dwi="dwi.nii.gz", apply_repair=True,
+    out_bvec="dwi.fixed.bvec", out_bval="dwi.fixed.bval",
+    provenance="provenance.json",
+)
 
 # Render the canonical report to self-contained HTML (figures embedded)
 open("report.html", "w").write(gg.render_html(report))
@@ -325,7 +344,7 @@ background, so differences reflect only the candidate gradient transform.
 ### Example notebook
 
 A runnable [quickstart notebook](examples/quickstart.ipynb) walks through the full
-workflow — inspect, audit, repair, and verify — on a public diffusion MRI example,
+workflow — inspect, audit, authorize correction, and verify — on a public diffusion MRI example,
 downloaded automatically on first run. It needs only
 `pip install gradlint dipy`.
 
@@ -353,13 +372,14 @@ direction-count reduction:
 - **0 false repairs** on 133 clean acquired tables.
 - **1106/1106 correct top-ranked conventions**, with 100% antipode-aware agreement
   with `dwigradcheck`; all **1022 FLAG repairs** matched the oracle, while
-  **84 WARN cases** withheld repair.
+  **84 WARN cases** withheld repair. Writing requires `--apply-repair` for FLAG
+  output and both repair flags for WARN output.
 - Frame-aware FSL ↔ MRtrix emission passed all numerical comparisons in
   **190/190 subjects** through both input routes.
 
 With GradLint 1.1.5 and libdeflate, median paired speed-ups were **12.90–23.25×**
 at eight threads per tool and **5.27–8.91×** with automatic/default threading
-across the three manuscript timing groups. These results concern the tested
+across the three tested cohort groups. These results concern the tested
 axis flips; they do not establish repair safety for errors outside that model.
 
 ## Development

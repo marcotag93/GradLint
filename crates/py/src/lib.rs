@@ -13,7 +13,7 @@ use pyo3::types::{PyBytes, PyDict};
 
 use gradlint_core::io::provenance::InputFile;
 use gradlint_core::io::{fsl, mrtrix};
-use gradlint_core::pipeline::{self, AuditOptions, RecomputeSpec, RepairSpec};
+use gradlint_core::pipeline::{self, AuditOptions, RecomputeSpec};
 use gradlint_core::{bids_batch, GlyphData, GradientTable, Report, ShellConfig, VolumeInfo};
 
 #[pyfunction]
@@ -59,7 +59,7 @@ fn inspect(
 }
 
 #[pyfunction]
-#[pyo3(signature = (bvec=None, bval=None, grad=None, dwi=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None))]
+#[pyo3(signature = (bvec=None, bval=None, grad=None, dwi=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None, apply_repair=false, force_repair=false, dry_run=false, in_place=false, out_bvec=None, out_bval=None, out_grad=None, provenance=None))]
 #[allow(clippy::too_many_arguments)]
 fn audit(
     bvec: Option<String>,
@@ -75,7 +75,26 @@ fn audit(
     strict: bool,
     norm_tolerance: f64,
     threads: Option<usize>,
+    apply_repair: bool,
+    force_repair: bool,
+    dry_run: bool,
+    in_place: bool,
+    out_bvec: Option<String>,
+    out_bval: Option<String>,
+    out_grad: Option<String>,
+    provenance: Option<String>,
 ) -> PyResult<String> {
+    let request = pipeline::RepairRequest {
+        bvec: out_bvec.map(Into::into),
+        bval: out_bval.map(Into::into),
+        mrtrix: out_grad.map(Into::into),
+        provenance: provenance.map(Into::into),
+        apply_repair,
+        force_repair,
+        dry_run,
+        in_place,
+    };
+    request.validate(dwi.is_some(), false, false).map_err(err)?;
     let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let mut opts = options(
@@ -86,6 +105,7 @@ fn audit(
         strict,
         norm_tolerance,
     );
+    let mut spec = None;
     let data = match dwi.as_deref() {
         Some(path) => {
             let (volume, info) = gradlint_core::read_volume_with_info(path).map_err(err)?;
@@ -95,19 +115,32 @@ fn audit(
                 gradlint_core::frame_for(grad.is_some()),
                 step,
             );
+            spec = request.resolve(gradlint_core::FrameMaps::resolve(
+                gradlint_core::frame_for(grad.is_some()),
+                &info,
+            ));
             Some(volume)
         }
         None => None,
     };
     let mask = read_optional_mask(mask.as_deref())?;
     let report = execution
-        .run(|| pipeline::audit(&table, data.as_ref(), mask.as_deref(), inputs, opts))
+        .run(|| {
+            pipeline::audit_requested(
+                &table,
+                data.as_ref(),
+                mask.as_deref(),
+                inputs,
+                opts,
+                spec.as_ref(),
+            )
+        })
         .map_err(err)?;
-    to_json(&report)
+    to_json(&report.report)
 }
 
 #[pyfunction]
-#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None))]
+#[pyo3(signature = (dwi, bvec=None, bval=None, grad=None, mask=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, strict=false, norm_tolerance=0.05, threads=None, apply_repair=false, force_repair=false, dry_run=false, in_place=false, out_bvec=None, out_bval=None, out_grad=None, provenance=None))]
 #[allow(clippy::too_many_arguments)]
 fn audit_with_glyphs(
     py: Python<'_>,
@@ -124,7 +157,26 @@ fn audit_with_glyphs(
     strict: bool,
     norm_tolerance: f64,
     threads: Option<usize>,
+    apply_repair: bool,
+    force_repair: bool,
+    dry_run: bool,
+    in_place: bool,
+    out_bvec: Option<String>,
+    out_bval: Option<String>,
+    out_grad: Option<String>,
+    provenance: Option<String>,
 ) -> PyResult<(String, Py<PyDict>)> {
+    let request = pipeline::RepairRequest {
+        bvec: out_bvec.map(Into::into),
+        bval: out_bval.map(Into::into),
+        mrtrix: out_grad.map(Into::into),
+        provenance: provenance.map(Into::into),
+        apply_repair,
+        force_repair,
+        dry_run,
+        in_place,
+    };
+    request.validate(true, false, false).map_err(err)?;
     let execution = gradlint_core::Execution::new(threads).map_err(err)?;
     let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
     let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
@@ -142,11 +194,24 @@ fn audit_with_glyphs(
         gradlint_core::frame_for(grad.is_some()),
         step,
     );
+    let spec = request.resolve(gradlint_core::FrameMaps::resolve(
+        gradlint_core::frame_for(grad.is_some()),
+        &info,
+    ));
     let mask = read_optional_mask(mask.as_deref())?;
     let (report, glyphs) = execution
-        .run(|| pipeline::audit_with_glyphs(&table, &data, mask.as_deref(), inputs, opts))
+        .run(|| {
+            pipeline::audit_requested_with_glyphs(
+                &table,
+                &data,
+                mask.as_deref(),
+                inputs,
+                opts,
+                spec.as_ref(),
+            )
+        })
         .map_err(err)?;
-    Ok((to_json(&report)?, glyph_payload(py, &glyphs, &info)?))
+    Ok((to_json(&report.report)?, glyph_payload(py, &glyphs, &info)?))
 }
 
 /// One instrumented audit: returns the report JSON plus a per-stage wall-clock
@@ -405,122 +470,8 @@ fn detect_flip_with_glyphs(
     Ok((to_json(&report)?, glyph_payload(py, &glyphs, &info)?))
 }
 
-#[pyfunction]
-#[pyo3(signature = (dwi, out_bvec, out_bval, bvec=None, bval=None, grad=None, mask=None, out_grad=None, provenance=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, dry_run=false, in_place=false, strict=false, force_repair=false, norm_tolerance=0.05, threads=None))]
-#[allow(clippy::too_many_arguments)]
-fn repair(
-    dwi: String,
-    out_bvec: String,
-    out_bval: String,
-    bvec: Option<String>,
-    bval: Option<String>,
-    grad: Option<String>,
-    mask: Option<String>,
-    out_grad: Option<String>,
-    provenance: Option<String>,
-    tolerance: f64,
-    b0_threshold: f64,
-    shell: Option<f64>,
-    step: Option<f64>,
-    margin_threshold: f64,
-    dry_run: bool,
-    in_place: bool,
-    strict: bool,
-    force_repair: bool,
-    norm_tolerance: f64,
-    threads: Option<usize>,
-) -> PyResult<String> {
-    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
-    let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
-    let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
-    let mut opts = options(
-        tolerance,
-        b0_threshold,
-        shell,
-        margin_threshold,
-        strict,
-        norm_tolerance,
-    );
-    let frame = gradlint_core::frame_for(grad.is_some());
-    pipeline::apply_geometry(&mut opts, &info, frame, step);
-    let mask = read_optional_mask(mask.as_deref())?;
-    let spec = RepairSpec {
-        bvec: out_bvec.into(),
-        bval: out_bval.into(),
-        mrtrix: out_grad.map(Into::into),
-        provenance: provenance.map(Into::into),
-        dry_run,
-        in_place,
-        force_repair,
-        frame: Some(gradlint_core::FrameMaps::resolve(frame, &info)),
-    };
-    let outcome = execution
-        .run(|| pipeline::repair(&table, Some(&data), mask.as_deref(), inputs, opts, &spec))
-        .map_err(err)?;
-    to_json(&outcome.report)
-}
-
-#[pyfunction]
-#[pyo3(signature = (dwi, out_bvec, out_bval, bvec=None, bval=None, grad=None, mask=None, out_grad=None, provenance=None, tolerance=0.05, b0_threshold=50.0, shell=None, step=None, margin_threshold=0.02, dry_run=false, in_place=false, strict=false, force_repair=false, norm_tolerance=0.05, threads=None))]
-#[allow(clippy::too_many_arguments)]
-fn repair_with_glyphs(
-    py: Python<'_>,
-    dwi: String,
-    out_bvec: String,
-    out_bval: String,
-    bvec: Option<String>,
-    bval: Option<String>,
-    grad: Option<String>,
-    mask: Option<String>,
-    out_grad: Option<String>,
-    provenance: Option<String>,
-    tolerance: f64,
-    b0_threshold: f64,
-    shell: Option<f64>,
-    step: Option<f64>,
-    margin_threshold: f64,
-    dry_run: bool,
-    in_place: bool,
-    strict: bool,
-    force_repair: bool,
-    norm_tolerance: f64,
-    threads: Option<usize>,
-) -> PyResult<(String, Py<PyDict>)> {
-    let execution = gradlint_core::Execution::new(threads).map_err(err)?;
-    let (table, inputs) = load_table(bvec.as_deref(), bval.as_deref(), grad.as_deref())?;
-    let (data, info) = gradlint_core::read_volume_with_info(&dwi).map_err(err)?;
-    let mut opts = options(
-        tolerance,
-        b0_threshold,
-        shell,
-        margin_threshold,
-        strict,
-        norm_tolerance,
-    );
-    let frame = gradlint_core::frame_for(grad.is_some());
-    pipeline::apply_geometry(&mut opts, &info, frame, step);
-    let mask = read_optional_mask(mask.as_deref())?;
-    let spec = RepairSpec {
-        bvec: out_bvec.into(),
-        bval: out_bval.into(),
-        mrtrix: out_grad.map(Into::into),
-        provenance: provenance.map(Into::into),
-        dry_run,
-        in_place,
-        force_repair,
-        frame: Some(gradlint_core::FrameMaps::resolve(frame, &info)),
-    };
-    let (outcome, glyphs) = execution
-        .run(|| pipeline::repair_with_glyphs(&table, &data, mask.as_deref(), inputs, opts, &spec))
-        .map_err(err)?;
-    Ok((
-        to_json(&outcome.report)?,
-        glyph_payload(py, &glyphs, &info)?,
-    ))
-}
-
 /// Opt-in b-value recovery from amplitude-encoded bvecs. Never reached from
-/// `repair`; returns a JSON before/after summary.
+/// `audit`; returns a JSON before/after summary.
 #[pyfunction]
 #[pyo3(signature = (out_bvec, out_bval, bvec=None, bval=None, grad=None, out_grad=None, provenance=None, b0_threshold=50.0, dry_run=false, in_place=false, threads=None))]
 #[allow(clippy::too_many_arguments)]
@@ -658,8 +609,6 @@ fn _gradlint(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(audit_bids, m)?)?;
     m.add_function(wrap_pyfunction!(detect_flip, m)?)?;
     m.add_function(wrap_pyfunction!(detect_flip_with_glyphs, m)?)?;
-    m.add_function(wrap_pyfunction!(repair, m)?)?;
-    m.add_function(wrap_pyfunction!(repair_with_glyphs, m)?)?;
     m.add_function(wrap_pyfunction!(recompute_bval, m)?)?;
     Ok(())
 }

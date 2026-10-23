@@ -18,7 +18,7 @@ use crate::gradient::GradientTable;
 use crate::io::provenance::{self, FrameProvenance, InputFile, Provenance};
 use crate::io::{fsl, mrtrix};
 use crate::repair::{apply_transform, prepare_output, Repair};
-use crate::report::{BvalRecoverySummary, RepairInfo, Report, SchemeTable, ShellCount};
+use crate::report::{BvalRecoverySummary, RepairInfo, Report, SchemeTable, ShellCount, Status};
 use crate::scheme_qc;
 use crate::shell::{b0_drift, detect_shells, summarize, B0Drift, Shell, ShellConfig};
 use crate::volume::mean_for_volumes;
@@ -94,6 +94,44 @@ pub fn audit(
     inputs: Vec<InputFile>,
     options: AuditOptions,
 ) -> Result<Report> {
+    Ok(withhold_correction(audit_report(
+        table, data, mask, inputs, options,
+    )?))
+}
+
+pub fn audit_with_glyphs(
+    table: &GradientTable,
+    data: &ArrayD<f32>,
+    mask: Option<&[bool]>,
+    inputs: Vec<InputFile>,
+    options: AuditOptions,
+) -> Result<(Report, GlyphData)> {
+    let (report, glyphs) = audit_report_with_glyphs(table, data, mask, inputs, options)?;
+    Ok((withhold_correction(report), glyphs))
+}
+
+fn withhold_correction(report: Report) -> Report {
+    if report
+        .flip
+        .as_ref()
+        .is_some_and(|flip| flip.decision != Decision::Pass)
+    {
+        report.with_status(Status::Warn).with_note(
+            "repair withheld: --apply-repair is required to authorize writing; \
+             verify volume-to-gradient pairing before applying a global correction.",
+        )
+    } else {
+        report
+    }
+}
+
+fn audit_report(
+    table: &GradientTable,
+    data: Option<&ArrayD<f32>>,
+    mask: Option<&[bool]>,
+    inputs: Vec<InputFile>,
+    options: AuditOptions,
+) -> Result<Report> {
     let mut report = scheme_report(table, inputs, options);
     if let Some(data) = data {
         check_dwi_inputs(table, data, mask)?;
@@ -103,7 +141,7 @@ pub fn audit(
     scheme_qc::apply(report, options.strict)
 }
 
-pub fn audit_with_glyphs(
+fn audit_report_with_glyphs(
     table: &GradientTable,
     data: &ArrayD<f32>,
     mask: Option<&[bool]>,
@@ -136,7 +174,10 @@ pub fn audit_timed(
     report = report.with_b0_drift(compute_drift(data, table, mask, options.shell));
     let (flip, timings) = run_flip_timed(data, table, mask, options)?;
     report = note_low_mask_fa(report.with_flip(flip));
-    Ok((scheme_qc::apply(report, options.strict)?, timings))
+    Ok((
+        withhold_correction(scheme_qc::apply(report, options.strict)?),
+        timings,
+    ))
 }
 
 pub fn audit_timed_with_glyphs(
@@ -151,7 +192,11 @@ pub fn audit_timed_with_glyphs(
     report = report.with_b0_drift(compute_drift(data, table, mask, options.shell));
     let (flip, timings, glyphs) = run_flip_timed_with_glyphs(data, table, mask, options)?;
     report = note_low_mask_fa(report.with_flip(flip));
-    Ok((scheme_qc::apply(report, options.strict)?, timings, glyphs))
+    Ok((
+        withhold_correction(scheme_qc::apply(report, options.strict)?),
+        timings,
+        glyphs,
+    ))
 }
 
 /// Flip detection only (requires an image): a lean scheme + flip report.
@@ -185,6 +230,63 @@ pub fn detect_with_glyphs(
     Ok((note_low_mask_fa(report), glyphs))
 }
 
+#[derive(Debug, Default)]
+pub struct RepairRequest {
+    pub bvec: Option<PathBuf>,
+    pub bval: Option<PathBuf>,
+    pub mrtrix: Option<PathBuf>,
+    pub provenance: Option<PathBuf>,
+    pub apply_repair: bool,
+    pub force_repair: bool,
+    pub dry_run: bool,
+    pub in_place: bool,
+}
+
+impl RepairRequest {
+    pub fn validate(&self, has_dwi: bool, bids: bool, profile: bool) -> Result<()> {
+        let outputs = self.bvec.is_some()
+            || self.bval.is_some()
+            || self.mrtrix.is_some()
+            || self.provenance.is_some();
+        let action = self.apply_repair || self.dry_run;
+        let any = action || outputs || self.force_repair || self.in_place;
+        let reason = if bids && any {
+            Some("repair options are not supported with --bids")
+        } else if profile && any {
+            Some("repair options are not supported with --profile")
+        } else if action && !has_dwi {
+            Some("--apply-repair and --dry-run require --dwi")
+        } else if action && (self.bvec.is_none() || self.bval.is_none()) {
+            Some("--apply-repair and --dry-run require --out-bvec and --out-bval")
+        } else if outputs && !action {
+            Some("output paths require --apply-repair or --dry-run")
+        } else {
+            None
+        };
+        match reason {
+            Some(reason) => Err(Error::InvalidRepairRequest(reason.to_string())),
+            None => Ok(()),
+        }
+    }
+
+    pub fn resolve(&self, frame: FrameMaps) -> Option<RepairSpec> {
+        if !self.apply_repair && !self.dry_run {
+            return None;
+        }
+        Some(RepairSpec {
+            bvec: self.bvec.clone()?,
+            bval: self.bval.clone()?,
+            mrtrix: self.mrtrix.clone(),
+            provenance: self.provenance.clone(),
+            dry_run: self.dry_run,
+            in_place: self.in_place,
+            force_repair: self.force_repair,
+            apply_repair: self.apply_repair,
+            frame: Some(frame),
+        })
+    }
+}
+
 /// Where a repair writes its corrected tables and provenance.
 #[derive(Debug, Clone)]
 pub struct RepairSpec {
@@ -197,6 +299,8 @@ pub struct RepairSpec {
     /// Apply the best-candidate remap on a WARN decision too, overriding the
     /// conservative withhold. Never affects PASS or the detection logic.
     pub force_repair: bool,
+    /// Explicit consent to write; also required when force_repair is set.
+    pub apply_repair: bool,
     /// Affine-derived maps that re-express the corrected table into each output
     /// format's stored frame. `None` writes the input-frame table verbatim to
     /// every format (correct only when output format = input format).
@@ -211,34 +315,40 @@ pub struct RepairOutput {
     pub backups: Vec<PathBuf>,
 }
 
-/// Audit, then apply and write the recommended repair when a flip is flagged.
+/// Audit, then write a flagged repair only with explicit write consent.
 ///
 /// A repair is built only on `Decision::Flag` (WARN/PASS never auto-repair),
 /// unless `spec.force_repair` is set, which also applies the best-candidate
 /// remap on a WARN decision (PASS and the detection logic are never affected).
-/// With `dry_run`, the corrected table is computed but nothing is written.
-pub fn repair(
+/// `apply_repair` authorizes writing. Dry runs need no write consent and exit WARN.
+pub fn audit_requested(
     table: &GradientTable,
     data: Option<&ArrayD<f32>>,
     mask: Option<&[bool]>,
     inputs: Vec<InputFile>,
     options: AuditOptions,
-    spec: &RepairSpec,
+    spec: Option<&RepairSpec>,
 ) -> Result<RepairOutput> {
-    let report = audit(table, data, mask, inputs.clone(), options)?;
-    repair_from_report(table, report, inputs, options, spec)
+    let report = audit_report(table, data, mask, inputs.clone(), options)?;
+    match spec {
+        Some(spec) => repair_from_report(table, report, inputs, options, spec),
+        None => Ok(RepairOutput::passthrough(withhold_correction(report))),
+    }
 }
 
-pub fn repair_with_glyphs(
+pub fn audit_requested_with_glyphs(
     table: &GradientTable,
     data: &ArrayD<f32>,
     mask: Option<&[bool]>,
     inputs: Vec<InputFile>,
     options: AuditOptions,
-    spec: &RepairSpec,
+    spec: Option<&RepairSpec>,
 ) -> Result<(RepairOutput, GlyphData)> {
-    let (report, glyphs) = audit_with_glyphs(table, data, mask, inputs.clone(), options)?;
-    let output = repair_from_report(table, report, inputs, options, spec)?;
+    let (report, glyphs) = audit_report_with_glyphs(table, data, mask, inputs.clone(), options)?;
+    let output = match spec {
+        Some(spec) => repair_from_report(table, report, inputs, options, spec)?,
+        None => RepairOutput::passthrough(withhold_correction(report)),
+    };
     Ok((output, glyphs))
 }
 
@@ -255,19 +365,14 @@ fn repair_from_report(
     let Some(flip) = report.flip.clone() else {
         return Ok(RepairOutput::passthrough(report));
     };
+    if !spec.apply_repair && !spec.dry_run && flip.decision != Decision::Pass {
+        return Ok(RepairOutput::passthrough(withhold_correction(report)));
+    }
     let rep = match Repair::from_flip(table, &flip) {
         Some(rep) => rep,
         None if spec.force_repair && flip.decision == Decision::Warn => {
             match Repair::force_from_best(table, &flip) {
-                Some(rep) => {
-                    report.notes.push(format!(
-                        "repair force-applied on a WARN decision (--force-repair); margin \
-                         {:.2}% is below the {:.0}% auto-repair threshold — verify the result.",
-                        flip.relative_margin * 100.0,
-                        options.flip.margin_threshold * 100.0
-                    ));
-                    rep
-                }
+                Some(rep) => rep,
                 None => return Ok(RepairOutput::passthrough(report)),
             }
         }
@@ -281,12 +386,25 @@ fn repair_from_report(
             outputs: Vec::new(),
         };
         return Ok(RepairOutput {
-            report: report.with_repair(info),
+            report: report.with_status(Status::Warn).with_repair(info),
             repaired: Some(rep.table),
             backups: Vec::new(),
         });
     }
 
+    report.notes.push(
+        "repair authorized explicitly with --apply-repair; GradLint does not verify \
+         volume-to-gradient pairing."
+            .to_string(),
+    );
+    if flip.decision == Decision::Warn {
+        report.notes.push(format!(
+            "repair force-applied on a WARN decision (--force-repair); margin \
+             {:.2}% is below the {:.0}% auto-repair threshold — verify the result.",
+            flip.relative_margin * 100.0,
+            options.flip.margin_threshold * 100.0
+        ));
+    }
     let mut outputs = Vec::new();
     let mut backups = Vec::new();
     push_backup(&mut backups, prepare_output(&spec.bvec, spec.in_place)?);
@@ -354,7 +472,7 @@ pub struct RecomputeOutput {
 
 /// Recover amplitude-encoded b-values into a corrected bval + unit bvec.
 ///
-/// Opt-in only — never reached from `repair`, which keeps the trust-bval
+/// Opt-in only — never reached from `audit`, which keeps the trust-bval
 /// contract. Computes `b_i = b_nominal·(|g_i|/max)²`, writes the corrected
 /// tables (honoring `dry_run`/`in_place`) and an optional provenance log, and
 /// returns a before/after shell summary.
@@ -579,6 +697,11 @@ fn write_provenance(
         prov = prov.with_metrics(shells, angular);
     }
     prov = prov.with_flip(flip).with_outputs(outputs);
+    if let Some(repair) = &report.repair {
+        prov.applied_transform = Some(repair.matrix);
+        prov.applied_label = Some(repair.label.clone());
+    }
+    prov.notes = report.notes.clone();
     if let Some(frame) = &spec.frame {
         prov = prov.with_frame(frame_provenance(frame, spec.mrtrix.is_some()));
     }
@@ -928,6 +1051,43 @@ mod tests {
     }
 
     #[test]
+    fn repair_requires_explicit_write_consent() {
+        let (_truth, corrupted, data) = flip_case();
+        let dir = tempdir().unwrap();
+        let spec = RepairSpec {
+            bvec: dir.path().join("out.bvec"),
+            bval: dir.path().join("out.bval"),
+            mrtrix: Some(dir.path().join("out.b")),
+            provenance: Some(dir.path().join("prov.json")),
+            dry_run: false,
+            in_place: true,
+            force_repair: true,
+            apply_repair: false,
+            frame: None,
+        };
+        std::fs::write(&spec.bvec, "original").unwrap();
+        let out = audit_requested(
+            &corrupted,
+            Some(&data),
+            None,
+            Vec::new(),
+            options(),
+            Some(&spec),
+        )
+        .unwrap();
+        assert_eq!(out.report.status, Status::Warn);
+        assert_eq!(out.report.flip.as_ref().unwrap().decision, Decision::Flag);
+        assert_eq!(out.report.exit_code(), 3);
+        assert!(out.report.repair.is_none());
+        assert!(out.repaired.is_none());
+        assert!(out.backups.is_empty());
+        assert_eq!(std::fs::read_to_string(&spec.bvec).unwrap(), "original");
+        assert!(!spec.bval.exists());
+        assert!(!spec.mrtrix.as_ref().unwrap().exists());
+        assert!(!spec.provenance.as_ref().unwrap().exists());
+    }
+
+    #[test]
     fn repair_dry_run_flags_without_writing() {
         let (_truth, corrupted, data) = flip_case();
         let dir = tempdir().unwrap();
@@ -939,10 +1099,20 @@ mod tests {
             dry_run: true,
             in_place: false,
             force_repair: false,
+            apply_repair: true,
             frame: None,
         };
-        let out = repair(&corrupted, Some(&data), None, Vec::new(), options(), &spec).unwrap();
-        assert_eq!(out.report.status, Status::Flag);
+        let out = audit_requested(
+            &corrupted,
+            Some(&data),
+            None,
+            Vec::new(),
+            options(),
+            Some(&spec),
+        )
+        .unwrap();
+        assert_eq!(out.report.status, Status::Warn);
+        assert_eq!(out.report.exit_code(), 3);
         assert!(out.report.repair.is_some());
         assert!(out.repaired.is_some());
         assert!(!spec.bvec.exists());
@@ -960,9 +1130,18 @@ mod tests {
             dry_run: false,
             in_place: false,
             force_repair: false,
+            apply_repair: true,
             frame: None,
         };
-        let out = repair(&corrupted, Some(&data), None, Vec::new(), options(), &spec).unwrap();
+        let out = audit_requested(
+            &corrupted,
+            Some(&data),
+            None,
+            Vec::new(),
+            options(),
+            Some(&spec),
+        )
+        .unwrap();
         assert!(spec.bvec.exists() && spec.bval.exists());
         assert!(spec.mrtrix.unwrap().exists());
         assert!(spec.provenance.unwrap().exists());
@@ -1089,12 +1268,21 @@ mod tests {
             dry_run: true,
             in_place: false,
             force_repair: false,
+            apply_repair: true,
             frame: Some(FrameMaps::resolve(
                 GradientFrame::Fsl,
                 &affine([-2.0, -2.0, 2.0]), // divergent: det > 0, two negated axes
             )),
         };
-        let out = repair(&corrupted, Some(&data), None, Vec::new(), options(), &spec).unwrap();
+        let out = audit_requested(
+            &corrupted,
+            Some(&data),
+            None,
+            Vec::new(),
+            options(),
+            Some(&spec),
+        )
+        .unwrap();
         assert!(out.report.notes.iter().any(|n| n.contains("diverge")));
     }
 }
