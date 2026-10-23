@@ -440,7 +440,10 @@ def test_thread_pools_preserve_reports_and_repairs(
         bvec = tmp_path / f"{len(repaired)}.bvec"
         bval = tmp_path / f"{len(repaired)}.bval"
         gg.audit(
-            out_bvec=str(bvec), out_bval=str(bval), **kwargs, threads=threads,
+            out_bvec=str(bvec),
+            out_bval=str(bval),
+            **kwargs,
+            threads=threads,
             apply_repair=True,
         )
         repaired.append((bvec.read_bytes(), bval.read_bytes()))
@@ -488,6 +491,7 @@ def test_nthreads_cli_and_invalid_count(
     assert "positive integer" in capsys.readouterr().err
     with pytest.raises(ValueError, match="positive integer"):
         gg.audit(dataset["bvec"], dataset["bval"], threads=0)
+
 
 @pytest.mark.parametrize("margin_threshold", [0.000001, 1.0])
 @pytest.mark.parametrize("apply_repair", [False, True])
@@ -581,7 +585,7 @@ def test_audit_repair_cli_write_consent(
     ]
     if not apply_repair:
         start = args.index("--out-bvec")
-        del args[start:start + 4]
+        del args[start : start + 4]
     if apply_repair:
         args.append("--apply-repair")
     if force_repair:

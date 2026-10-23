@@ -421,8 +421,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "audit":
         repair_options = (
-            args.apply_repair or args.force_repair or args.dry_run or args.force
-            or args.out_bvec or args.out_bval or args.out_grad or args.provenance
+            args.apply_repair
+            or args.force_repair
+            or args.dry_run
+            or args.force
+            or args.out_bvec
+            or args.out_bval
+            or args.out_grad
+            or args.provenance
         )
         if repair_options and (args.bids or args.profile):
             print(
