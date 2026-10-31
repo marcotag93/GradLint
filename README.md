@@ -23,29 +23,27 @@ are never modified in place unless explicitly requested.
 [![Email](https://img.shields.io/badge/Email-marco.tagliaferri93%40gmail.com-D14836?style=flat&logo=gmail&logoColor=white)](mailto:marco.tagliaferri93@gmail.com)
 [![GitHub](https://img.shields.io/badge/GitHub-marcotag93-181717?style=flat&logo=github)](https://github.com/marcotag93)
 
-If you use GradLint in your research, please cite the software:
+If you use GradLint in your research, please cite the article:
 
-> Tagliaferri, M. (2026). *GradLint* [Computer software]. Zenodo. [https://doi.org/10.5281/zenodo.20847595](https://doi.org/10.5281/zenodo.20847595)
+> Tagliaferri, M., & Cattaneo, L. (2027). GradLint: A fast, open-source Rust tool for b-vector flip detection, gradient-scheme QC, and auto-repair in diffusion MRI. *Journal of Neuroscience Methods, 438*, 110942. [https://doi.org/10.1016/j.jneumeth.2026.110942](https://doi.org/10.1016/j.jneumeth.2026.110942)
 
 **BibTeX:**
 
 ```bibtex
-@software{Tagliaferri_GradLint_2026,
-  author    = {Tagliaferri, Marco},
-  title     = {GradLint},
-  year      = {2026},
-  publisher = {Zenodo},
-  doi       = {10.5281/zenodo.20847595},
-  url       = {https://doi.org/10.5281/zenodo.20847595}
+@article{Tagliaferri_GradLint_2027,
+  author    = {Tagliaferri, Marco and Cattaneo, Luigi},
+  title     = {{GradLint}: A fast, open-source {Rust} tool for b-vector flip detection, gradient-scheme {QC}, and auto-repair in diffusion {MRI}},
+  journal   = {Journal of Neuroscience Methods},
+  year      = {2027},
+  volume    = {438},
+  pages     = {110942},
+  doi       = {10.1016/j.jneumeth.2026.110942},
+  url       = {https://doi.org/10.1016/j.jneumeth.2026.110942}
 }
 ```
 
 Citation metadata is provided in [CITATION.cff](CITATION.cff) and is available through
-GitHub's "Cite this repository" button. The DOI above identifies all versions;
-cite the specific release used in your analysis when available.
-
-> A manuscript describing GradLint is currently in preparation. This section will be
-> updated with the article citation once it is published.
+GitHub's "Cite this repository" button, with the article as the preferred citation.
 
 ---
 

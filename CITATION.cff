@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 title: GradLint
-message: "If you use this software, please cite it as below."
+message: "If you use GradLint in your research, please cite the article below."
 type: software
 authors:
   - given-names: Marco
@@ -15,6 +15,25 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.20847595
     description: Concept DOI for all versions.
+preferred-citation:
+  type: article
+  authors:
+    - given-names: Marco
+      family-names: Tagliaferri
+      orcid: "https://orcid.org/0000-0002-1800-3977"
+    - given-names: Luigi
+      family-names: Cattaneo
+      orcid: "https://orcid.org/0000-0001-8905-7529"
+  title: >-
+    GradLint: A fast, open-source Rust tool for b-vector flip detection,
+    gradient-scheme QC, and auto-repair in diffusion MRI
+  journal: Journal of Neuroscience Methods
+  year: 2027
+  month: 2
+  volume: 438
+  start: 110942
+  doi: 10.1016/j.jneumeth.2026.110942
+  url: "https://doi.org/10.1016/j.jneumeth.2026.110942"
 abstract: >-
   Fast, standalone gradient-scheme quality control, b-vector flip and
   axis-permutation detection, and auto-repair for diffusion MRI.
